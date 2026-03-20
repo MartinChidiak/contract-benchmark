@@ -3,6 +3,7 @@ experiments/
 __pycache__/
 *.pyc
 *.Zone.Identifier
+Contratos_txt/
 Dataset_Filtrado_Tesis/
 ground_truth.csv
 master_clauses.csv

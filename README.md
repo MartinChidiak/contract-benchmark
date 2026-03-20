@@ -13,6 +13,8 @@ El sistema ejecuta una matriz de experimentos donde cada experimento combina un 
 ## Arquitectura
 
 ```
+filtro_contratos.py     ← Filtra contratos de CUAD por tipo y los copia a Dataset_Filtrado_Tesis/
+filtro_labels.py        ← Genera ground_truth.csv filtrando master_clauses.csv por los contratos seleccionados
 run_all.py              ← Orquestador principal / fuente de la matriz de experimentos
 run_experiment.py       ← Lógica de inferencia con vLLM (un experimento a la vez)
 benchmark.py            ← Evaluación: compara JSONs extraídos vs ground_truth.csv
@@ -177,9 +179,42 @@ experiments/
 
 ## Dataset
 
-- **Ground truth**: `ground_truth.csv` (subconjunto de CUAD — Contract Understanding Atticus Dataset)
-- **Contratos**: directorio configurable (default `./Dataset_Filtrado_Tesis`), archivos `.txt`
+CUAD (Contract Understanding Atticus Dataset) está disponible en [atticusprojectai.org/cuad](https://www.atticusprojectai.org/cuad).
+
+- **Ground truth**: `ground_truth.csv` (subconjunto de CUAD generado con `filtro_labels.py`)
+- **Contratos**: `Dataset_Filtrado_Tesis/` (subconjunto de CUAD generado con `filtro_contratos.py`)
 - La clave de matching se normaliza: minúsculas, sin extensión, espacios colapsados
+
+### Preparación del dataset (ejecutar una sola vez)
+
+Los scripts de preparación toman los archivos originales de CUAD y generan el subconjunto usado en los experimentos.
+
+**Archivos necesarios (no incluidos en el repo):**
+
+| Archivo / Carpeta | Descripción |
+|---|---|
+| `Contratos_txt/` | Todos los contratos de CUAD en formato `.txt` |
+| `master_clauses.csv` | Labels completos de CUAD (todas las cláusulas) |
+
+**Paso 1 — Filtrar contratos por tipo**
+
+`filtro_contratos.py` copia de `Contratos_txt/` solo los contratos cuyos nombres contienen los tipos seleccionados para la tesis (Service Agreement, Affiliate Agreement, Maintenance Agreement, Non-Compete, Management Agreement):
+
+```bash
+python filtro_contratos.py
+# Genera: Dataset_Filtrado_Tesis/
+```
+
+**Paso 2 — Generar ground truth**
+
+`filtro_labels.py` cruza los contratos seleccionados contra `master_clauses.csv` y extrae solo las columnas relevantes al schema de extracción:
+
+```bash
+python filtro_labels.py
+# Genera: ground_truth.csv
+```
+
+Después de estos dos pasos el proyecto está listo para correr experimentos.
 
 ---
 
