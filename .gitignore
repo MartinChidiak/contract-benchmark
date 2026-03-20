@@ -1,0 +1,12 @@
+token.txt
+experiments/
+__pycache__/
+*.pyc
+*.Zone.Identifier
+Dataset_Filtrado_Tesis/
+ground_truth.csv
+master_clauses.csv
+screenshots/
+session_summary_2.txt
+comandsv2.txt
+files/
