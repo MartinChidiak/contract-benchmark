@@ -114,11 +114,14 @@ Definiciones de TP/FP/FN:
 docker build -t contract-benchmark .
 
 # Lanzar UI Streamlit
-docker run --gpus all \
-  -v $(pwd):/app \
-  -p 8501:8501 \
+
+# Contenedor corriendo como usuario no-root (USER 1000:1000 en Dockerfile) — recomendado
+docker run --gpus all -p 8501:8501 \
+  -v "$(pwd):/app" \
+  -v "$HOME/.cache/huggingface:/hf_cache" \
+  -e HF_HOME=/hf_cache \
   contract-benchmark \
-  streamlit run /app/app.py --server.address 0.0.0.0
+  streamlit run /app/app.py --server.port 8501 --server.address 0.0.0.0
 
 # Lanzar todos los experimentos por CLI
 docker run --gpus all \
