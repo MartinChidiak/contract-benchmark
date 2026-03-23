@@ -163,7 +163,9 @@ def parties_match(pred_value: Any, gt_value: Any) -> tuple[str, str, bool]:
     min_size = min(len(pred_tokens), len(gt_tokens))
 
     # Tolerant entity-level match: allow extra role words/aliases, require strong overlap.
-    match = overlap >= 3 and (overlap / min_size) >= 0.80
+    # Threshold adapts to short names (e.g. "IBM"): require full overlap when min_size < 3.
+    required = max(1, min(3, min_size))
+    match = overlap >= required and (overlap / min_size) >= 0.80
     return pred_norm, gt_norm, match
 
 
@@ -269,8 +271,9 @@ def benchmark(results_dir: Path, ground_truth_csv: Path, output_csv: Path) -> No
     files_with_predictions = 0
     fully_matched_files = 0
 
+    _ABSENT = {"not mentioned", "none", "null", ""}
     per_field_counts = {
-        field: {"correct": 0, "total": 0}
+        field: {"correct": 0, "total": 0, "present_correct": 0, "present_total": 0}
         for field in FIELD_MAPPING
     }
 
@@ -294,6 +297,11 @@ def benchmark(results_dir: Path, ground_truth_csv: Path, output_csv: Path) -> No
                 per_field_counts[field]["correct"] += 1
             else:
                 file_all_correct = False
+            gt_present = str(gt_norm).strip().lower() not in _ABSENT
+            if gt_present:
+                per_field_counts[field]["present_total"] += 1
+                if is_match:
+                    per_field_counts[field]["present_correct"] += 1
 
             detailed_rows.append(
                 {
@@ -345,13 +353,13 @@ def benchmark(results_dir: Path, ground_truth_csv: Path, output_csv: Path) -> No
         macro_acc_values.append(acc)
         print(f"{field:35s} {correct:4d}/{total:<4d}  acc={acc:.4f}")
 
-    micro_correct = sum(v["correct"] for v in per_field_counts.values())
-    micro_total = sum(v["total"] for v in per_field_counts.values())
+    micro_correct = sum(v["present_correct"] for v in per_field_counts.values())
+    micro_total = sum(v["present_total"] for v in per_field_counts.values())
     micro_acc = (micro_correct / micro_total) if micro_total else 0.0
     macro_acc = (sum(macro_acc_values) / len(macro_acc_values)) if macro_acc_values else 0.0
 
     print()
-    print(f"Micro accuracy (all cells):  {micro_acc:.4f}")
+    print(f"Micro accuracy (GT-present): {micro_acc:.4f}")
     print(f"Macro accuracy (avg fields): {macro_acc:.4f}")
     print(f"Detailed report:             {output_csv}")
 
