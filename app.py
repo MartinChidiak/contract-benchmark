@@ -174,6 +174,12 @@ with tab_run:
             use_container_width=True,
             disabled=is_running,
         )
+        bench_btn = st.button(
+            "📊 Run benchmark only",
+            use_container_width=True,
+            disabled=is_running,
+            help="Re-evaluate existing results without re-running inference.",
+        )
         if is_running:
             st.info("Run in progress. Configuration locked until it completes.")
 
@@ -181,7 +187,7 @@ with tab_run:
     with right:
         st.subheader("Progress & Logs")
 
-        if run_btn and not is_running:
+        if (run_btn or bench_btn) and not is_running:
             # ── Step 1: validate, store params, save uploads, trigger rerun ──
             active_models = [t for t, checked in selected_models.items() if checked]
             active_cfgs   = [c for c in BASE_CONFIGS if selected_cfgs.get(c["name"])]
@@ -202,10 +208,11 @@ with tab_run:
                     input_dir = DEFAULT_INPUT_DIR
 
                 st.session_state.run_params   = {
-                    "active_models": active_models,
-                    "active_cfgs":   active_cfgs,
-                    "input_dir":     input_dir,
-                    "tmp_dir":       tmp_dir,
+                    "active_models":  active_models,
+                    "active_cfgs":    active_cfgs,
+                    "input_dir":      input_dir,
+                    "tmp_dir":        tmp_dir,
+                    "benchmark_only": bool(bench_btn),
                 }
                 st.session_state.run_logs     = []
                 st.session_state.run_messages = []
@@ -215,11 +222,12 @@ with tab_run:
 
         elif is_running:
             # ── Step 2: widgets disabled, run inference from stored params ────
-            params        = st.session_state.run_params
-            active_models = params["active_models"]
-            active_cfgs   = params["active_cfgs"]
-            input_dir     = params["input_dir"]
-            tmp_dir       = params["tmp_dir"]
+            params         = st.session_state.run_params
+            active_models  = params["active_models"]
+            active_cfgs    = params["active_cfgs"]
+            input_dir      = params["input_dir"]
+            tmp_dir        = params["tmp_dir"]
+            benchmark_only = params.get("benchmark_only", False)
 
             total    = len(active_models) * len(active_cfgs)
             progress = st.progress(0, text="Starting…")
@@ -263,8 +271,11 @@ with tab_run:
                             except (json.JSONDecodeError, ValueError):
                                 pass
 
-                        with contextlib.redirect_stdout(buf):
-                            summary = run_inference(config)
+                        if benchmark_only:
+                            summary = {"skipped": True}
+                        else:
+                            with contextlib.redirect_stdout(buf):
+                                summary = run_inference(config)
 
                         detailed_csv = Path(config.output_dir) / "benchmark_detailed.csv"
                         with contextlib.redirect_stdout(buf):
@@ -293,7 +304,10 @@ with tab_run:
                             )
 
                         mac = metrics.get("macro_acc", "?") if metrics else "?"
-                        if summary.get("skipped"):
+                        if benchmark_only:
+                            msg = f"✅ {run_name} — benchmark refreshed. macro_acc={mac}"
+                            st.session_state.run_messages.append(("success", msg))
+                        elif summary.get("skipped"):
                             msg = f"ℹ️ {run_name} — all contracts already processed, benchmark refreshed. macro_acc={mac}"
                             st.session_state.run_messages.append(("info", msg))
                         else:
