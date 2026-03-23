@@ -26,6 +26,7 @@ import argparse
 import json
 import os
 import re
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -229,8 +230,6 @@ def apply_chat_template(
 
     # 2. Native template from the tokenizer
     if tokenizer.chat_template:
-        template_preview = tokenizer.chat_template[:60].replace("\n", " ")
-        print(f"   📋 Chat template: native ({config.model_id.split('/')[-1]}) — '{template_preview}...'")
         return tokenizer.apply_chat_template(
             messages,
             tokenize=False,
@@ -283,6 +282,23 @@ def estimate_char_limit(max_tokens: int, lang_factor: float) -> int:
     return int(max_tokens * lang_factor)
 
 
+def compute_lang_factor(tokenizer, sample_texts: list[str], max_sample_chars: int = 2000) -> float:
+    """Estimate chars-per-token ratio from sample texts using the loaded tokenizer.
+    Falls back to 3.5 if tokenization fails or no samples are provided."""
+    total_chars = total_tokens = 0
+    for text in sample_texts:
+        sample = text[:max_sample_chars]
+        try:
+            tokens = tokenizer.encode(sample, add_special_tokens=False)
+            total_chars += len(sample)
+            total_tokens += len(tokens)
+        except Exception:
+            continue
+    if total_tokens == 0:
+        return 3.5
+    return total_chars / total_tokens
+
+
 def split_into_chunks(text: str, chunk_size: int, overlap: int) -> list[str]:
     chunks, start = [], 0
     while start < len(text):
@@ -328,9 +344,27 @@ def normalize_extracted_data(data: dict) -> dict:
 def merge_results(results: list[dict]) -> dict:
     EMPTY = {None, "Not Mentioned", "No"}
     text_fields = {"parties", "renewal_term", "notice_period_to_terminate_renewal", "governing_law"}
+    categorical_fields = YES_NO_FIELDS | {"anti_assignment"}
+
     merged = {}
+
+    # Categorical fields: majority voting, positional tiebreak (earlier chunk wins).
+    for key in categorical_fields:
+        non_empty = [r[key] for r in results if r.get(key) not in EMPTY]
+        if not non_empty:
+            merged[key] = results[0].get(key) if results else None
+        else:
+            counts = Counter(non_empty)
+            max_count = max(counts.values())
+            candidates = {v for v, c in counts.items() if c == max_count}
+            # Tiebreak: first non-empty value by chunk position.
+            merged[key] = next(v for v in non_empty if v in candidates)
+
+    # Text and other fields: first non-null wins; concatenate if text field differs.
     for result in results:
         for key, value in result.items():
+            if key in categorical_fields:
+                continue
             if key not in merged:
                 merged[key] = value
             else:
@@ -469,7 +503,10 @@ def run(config: RunConfig) -> dict:
     # llm, tokenizer, active_ctx — tokenizer added here
     llm, tokenizer, active_ctx = load_llm_with_fallback(config)
     input_budget = active_ctx - config.max_output_tokens - 512
-    char_limit   = estimate_char_limit(input_budget, config.lang_factor)
+    sample_texts = [Path(config.input_dir, f).read_text(encoding="utf-8") for f in pending[:5]]
+    lang_factor  = compute_lang_factor(tokenizer, sample_texts)
+    print(f"📐 lang_factor: {lang_factor:.2f} chars/token (computed from {len(sample_texts)} samples, config default was {config.lang_factor})")
+    char_limit   = estimate_char_limit(input_budget, lang_factor)
     print(f"📏 Max chunk: {char_limit:,} chars (~{input_budget:,} tokens)")
 
     sampling_params = SamplingParams(
@@ -488,6 +525,13 @@ def run(config: RunConfig) -> dict:
     def make_prompt(text: str, chunk_info: str = "") -> str:
         messages = build_messages(config, text, chunk_info)
         return apply_chat_template(messages, tokenizer, config)
+
+    # Log chat template once per run
+    if tokenizer.chat_template:
+        template_preview = tokenizer.chat_template[:60].replace("\n", " ")
+        print(f"   📋 Chat template: native ({config.model_id.split('/')[-1]}) — '{template_preview}...'")
+    elif not config.chat_template_override:
+        print(f"   ⚠️  No chat_template found for {config.model_id}. Using generic fallback.")
 
     short_contracts, long_contracts = [], []
     for f in pending:
