@@ -32,12 +32,11 @@ RUN pip install --no-cache-dir --upgrade pip && \
     matplotlib \
     plotly
 
-# Crear usuario con el mismo UID/GID del host para que los archivos
-# generados en el volumen montado sean accesibles sin sudo desde WSL.
+# Correr como usuario no-root con el mismo UID/GID del host WSL.
+# Los archivos del venv son world-readable (755/644) — no requieren chown.
 # Pasar en docker run: --build-arg HOST_UID=$(id -u) --build-arg HOST_GID=$(id -g)
 ARG HOST_UID=1000
 ARG HOST_GID=1000
-RUN chown -R ${HOST_UID}:${HOST_GID} /opt/venv
 USER ${HOST_UID}:${HOST_GID}
 
 # Directorio de trabajo
