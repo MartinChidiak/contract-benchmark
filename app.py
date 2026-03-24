@@ -19,30 +19,19 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from experiment_config import RunConfig, MODEL_IDS, PROMPT_VERSIONS
+from experiment_config import (
+    RunConfig, MODEL_IDS, PROMPT_VERSIONS,
+    MODEL_MAX_CONTEXT, MODEL_PROMPT_OVERRIDE,
+)
 from run_experiment import run as run_inference
 from benchmark import benchmark as run_benchmark, normalize_filename_key, YES_NO_FIELDS
 from run_all import load_benchmark_summary, save_comparison_csv, FIELDS
-
-# Register Qwen3 prompt variant (mirrors run_all.py)
-if "v3_full_qwen3" not in PROMPT_VERSIONS:
-    PROMPT_VERSIONS["v3_full_qwen3"] = PROMPT_VERSIONS["v3_full"] + "\n/no_think"
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 DEFAULT_INPUT_DIR = "./Dataset_Filtrado_Tesis"
 GROUND_TRUTH_CSV  = "./ground_truth.csv"
 EXPERIMENTS_DIR   = Path("./experiments")
 COMPARISON_CSV    = EXPERIMENTS_DIR / "comparison.csv"
-
-MODEL_MAX_CONTEXT: dict[str, int] = {
-    "llama31_8b": 45000,
-    "qwen25_7b":  30000,
-    "qwen3_8b":   30000,
-}
-
-MODEL_PROMPT_OVERRIDE: dict[str, str] = {
-    "qwen3_8b": "v3_full_qwen3",
-}
 
 BASE_CONFIGS: list[dict] = [
     dict(
@@ -346,10 +335,85 @@ with tab_run:
             st.text_area("Logs", "\n".join(st.session_state.run_logs), height=400)
 
 
+# ── Load comparison data once (shared by sidebar, Tab 3, and Tab 4) ──────────
+_comparison_df = pd.read_csv(COMPARISON_CSV) if COMPARISON_CSV.exists() else None
+
+# ── Sidebar filters ───────────────────────────────────────────────────────────
+with st.sidebar:
+    st.header("🔍 Filters")
+    st.caption("Applied to Results, Comparison and Overview tabs.")
+    if _comparison_df is not None:
+        _all_runs_s    = _comparison_df["run_name"].tolist()
+        _avail_models  = sorted({r.split("__")[0] for r in _all_runs_s if "__" in r})
+        _avail_configs = sorted({r.split("__", 1)[1] for r in _all_runs_s if "__" in r})
+        sb_models  = st.multiselect("Models",  options=_avail_models,  default=_avail_models,  key="sb_models")
+        sb_configs = st.multiselect("Configs", options=_avail_configs, default=_avail_configs, key="sb_configs")
+    else:
+        sb_models  = []
+        sb_configs = []
+        st.info("No experiments yet.")
+
+    st.divider()
+    with st.expander("📖 Metric definitions"):
+        st.markdown("""
+**macro_acc** — Macro Accuracy
+Average per-field accuracy across all 12 fields.
+Includes correct *absent-absent* predictions (model says "Not Mentioned", GT is empty).
+*Tends to be optimistic on sparse fields.*
+
+---
+
+**macro_precision** — Macro Precision
+When the model extracts a value, how often is it correct?
+`TP / (TP + FP)` averaged across fields.
+*Low precision → model hallucinates values that aren't there.*
+
+---
+
+**macro_recall** — Macro Recall
+When a field is present in the contract, how often does the model find it?
+`TP / (TP + FN)` averaged across fields.
+*Low recall → model misses or fails to extract present fields.*
+
+---
+
+**macro_f1** — Macro F1
+Harmonic mean of Precision and Recall.
+Best single metric when both extraction and correctness matter equally.
+`2 · P · R / (P + R)` averaged across fields.
+
+---
+
+**micro_acc** — Micro Accuracy
+Accuracy computed **only** over cases where the ground truth is present
+(excludes absent-absent matches).
+More demanding than macro_acc; reveals true extraction ability.
+*A large gap between macro_acc and micro_acc means the model
+benefits heavily from predicting "Not Mentioned" correctly.*
+
+---
+
+**elapsed_seconds**
+Total inference time in seconds, accumulated across partial re-runs
+(new contracts added to an existing experiment).
+""")
+
+
 # ── Tab 2: Results ────────────────────────────────────────────────────────────
 with tab_results:
+    def _matches_sidebar(name: str) -> bool:
+        if "__" not in name:
+            return True
+        model, cfg = name.split("__", 1)
+        model_ok  = (not sb_models)  or (model in sb_models)
+        config_ok = (not sb_configs) or (cfg   in sb_configs)
+        return model_ok and config_ok
+
     exp_dirs = (
-        sorted([d for d in EXPERIMENTS_DIR.iterdir() if d.is_dir() and (d / "results").exists()])
+        sorted([
+            d for d in EXPERIMENTS_DIR.iterdir()
+            if d.is_dir() and (d / "results").exists() and _matches_sidebar(d.name)
+        ])
         if EXPERIMENTS_DIR.exists()
         else []
     )
@@ -410,70 +474,6 @@ with tab_results:
                 mime="text/csv",
             )
 
-
-
-# ── Load comparison data once (shared by sidebar, Tab 3, and Tab 4) ──────────
-_comparison_df = pd.read_csv(COMPARISON_CSV) if COMPARISON_CSV.exists() else None
-
-# ── Sidebar filters ───────────────────────────────────────────────────────────
-with st.sidebar:
-    st.header("🔍 Filters")
-    st.caption("Applied to Comparison and Overview tabs.")
-    if _comparison_df is not None:
-        _all_runs_s    = _comparison_df["run_name"].tolist()
-        _avail_models  = sorted({r.split("__")[0] for r in _all_runs_s if "__" in r})
-        _avail_configs = sorted({r.split("__", 1)[1] for r in _all_runs_s if "__" in r})
-        sb_models  = st.multiselect("Models",  options=_avail_models,  default=_avail_models,  key="sb_models")
-        sb_configs = st.multiselect("Configs", options=_avail_configs, default=_avail_configs, key="sb_configs")
-    else:
-        sb_models  = []
-        sb_configs = []
-        st.info("No experiments yet.")
-
-    st.divider()
-    with st.expander("📖 Metric definitions"):
-        st.markdown("""
-**macro_acc** — Macro Accuracy
-Average per-field accuracy across all 12 fields.
-Includes correct *absent-absent* predictions (model says "Not Mentioned", GT is empty).
-*Tends to be optimistic on sparse fields.*
-
----
-
-**macro_precision** — Macro Precision
-When the model extracts a value, how often is it correct?
-`TP / (TP + FP)` averaged across fields.
-*Low precision → model hallucinates values that aren't there.*
-
----
-
-**macro_recall** — Macro Recall
-When a field is present in the contract, how often does the model find it?
-`TP / (TP + FN)` averaged across fields.
-*Low recall → model misses or fails to extract present fields.*
-
----
-
-**macro_f1** — Macro F1
-Harmonic mean of Precision and Recall.
-Best single metric when both extraction and correctness matter equally.
-`2 · P · R / (P + R)` averaged across fields.
-
----
-
-**micro_acc** — Micro Accuracy
-Accuracy computed **only** over cases where the ground truth is present
-(excludes absent-absent matches).
-More demanding than macro_acc; reveals true extraction ability.
-*A large gap between macro_acc and micro_acc means the model
-benefits heavily from predicting "Not Mentioned" correctly.*
-
----
-
-**elapsed_seconds**
-Total inference time in seconds, accumulated across partial re-runs
-(new contracts added to an existing experiment).
-""")
 
 
 # ── Metric config (shared across Tab 3 and Tab 4) ─────────────────────────────
@@ -546,7 +546,10 @@ with tab_comparison:
             st.subheader("Overall metrics")
             macro_display_cols = [c for c in MACRO_METRIC_COLS if c in filtered.columns]
             summary_cols = [c for c in ["run_name", "files_evaluated"] + macro_display_cols + ["micro_acc", "elapsed_seconds"] if c in filtered.columns]
-            summary_df   = filtered[summary_cols].set_index("run_name")
+            summary_df = filtered[summary_cols].copy()
+            summary_df.insert(0, "model",  summary_df["run_name"].apply(lambda x: x.split("__")[0] if "__" in x else x))
+            summary_df.insert(1, "config", summary_df["run_name"].apply(lambda x: x.split("__", 1)[1] if "__" in x else ""))
+            summary_df = summary_df.drop(columns="run_name").set_index(["model", "config"])
             _col_help = {
                 "files_evaluated": st.column_config.NumberColumn(
                     "files_evaluated",
@@ -644,9 +647,8 @@ with tab_comparison:
                     x="minutes",
                     y=macro_col,
                     color="model",
-                    symbol="config",
                     hover_name="run_name",
-                    hover_data={"minutes": True, macro_col: ":.3f", "model": False, "config": False},
+                    hover_data={"minutes": True, macro_col: ":.3f", "model": False, "config": True},
                     range_y=[0, 1],
                     labels={
                         "minutes": "Elapsed time (min)",
