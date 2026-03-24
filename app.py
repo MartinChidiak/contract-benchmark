@@ -21,7 +21,7 @@ import streamlit as st
 
 from experiment_config import RunConfig, MODEL_IDS, PROMPT_VERSIONS
 from run_experiment import run as run_inference
-from benchmark import benchmark as run_benchmark
+from benchmark import benchmark as run_benchmark, normalize_filename_key, YES_NO_FIELDS
 from run_all import load_benchmark_summary, save_comparison_csv, FIELDS
 
 # Register Qwen3 prompt variant (mirrors run_all.py)
@@ -378,12 +378,45 @@ with tab_results:
             data = json.loads((results_path / file_name).read_text(encoding="utf-8"))
             st.json(data)
 
+            # ── Feature 1: Predicted vs. Ground Truth table ───────────────
+            detailed_csv_path = results_path / "benchmark_detailed.csv"
+            if detailed_csv_path.exists():
+                det_df = pd.read_csv(detailed_csv_path)
+                fkey = normalize_filename_key(file_name)
+                contract_rows = det_df[det_df["file_key"] == fkey]
+                if not contract_rows.empty:
+                    st.subheader("Predicted vs. Ground Truth")
+                    disp = contract_rows[["field", "pred_raw", "gt_raw", "match"]].copy()
+                    disp["match"] = disp["match"].map({1: "✅", 0: "❌", "1": "✅", "0": "❌"})
+                    disp.columns = ["Field", "Predicted", "Ground Truth", "Match"]
+                    st.dataframe(disp.set_index("Field"), use_container_width=True)
+
         # Show inference summary if available
         summary_path = results_path / "inference_summary.json"
         if summary_path.exists():
             with st.expander("Inference summary (last run only)"):
                 st.caption("Stats below reflect only the most recent inference run for this experiment, not the cumulative total.")
                 st.json(json.loads(summary_path.read_text(encoding="utf-8")))
+
+        # ── Feature 2: Download benchmark_detailed.csv ────────────────────
+        detailed_csv_dl = results_path / "benchmark_detailed.csv"
+        if detailed_csv_dl.exists():
+            st.download_button(
+                "⬇️ Download benchmark_detailed.csv",
+                data=detailed_csv_dl.read_bytes(),
+                file_name=f"{exp_name}_detailed.csv",
+                mime="text/csv",
+            )
+
+        # ── Feature 6: Delete experiment ──────────────────────────────────
+        with st.expander("⚠️ Danger zone"):
+            confirmed = st.checkbox(
+                f"Confirm: permanently delete **{exp_name}** and all its results.",
+                key="del_confirm",
+            )
+            if st.button("🗑️ Delete experiment", key="del_btn", disabled=not confirmed):
+                shutil.rmtree(EXPERIMENTS_DIR / exp_name)
+                st.rerun()
 
 
 # ── Load comparison data once (shared by sidebar, Tab 3, and Tab 4) ──────────
@@ -472,6 +505,14 @@ with tab_comparison:
     else:
         df       = _comparison_df
         all_runs = df["run_name"].tolist()
+
+        # ── Feature 2: Download comparison.csv ────────────────────────────
+        st.download_button(
+            "⬇️ Download comparison.csv",
+            data=COMPARISON_CSV.read_bytes(),
+            file_name="comparison.csv",
+            mime="text/csv",
+        )
 
         # Field names derived from acc_ columns (all metrics share the same fields)
         field_acc_cols = [f"acc_{f}" for f in FIELDS if f"acc_{f}" in df.columns]
@@ -679,3 +720,79 @@ with tab_overview:
                         coloraxis_colorbar=dict(title="F1"),
                     )
                     st.plotly_chart(fig_hm, use_container_width=True)
+
+                # ── 4. Contract difficulty ranking ────────────────────────
+                st.subheader("Contract difficulty ranking")
+                st.caption("Average accuracy per contract across all selected runs. Lower = harder.")
+                all_detailed_dfs = []
+                for rn in selected_ov_runs:
+                    det_path = EXPERIMENTS_DIR / rn / "results" / "benchmark_detailed.csv"
+                    if det_path.exists():
+                        _d = pd.read_csv(det_path)
+                        _d["run_name"] = rn
+                        all_detailed_dfs.append(_d)
+                if all_detailed_dfs:
+                    combined_det = pd.concat(all_detailed_dfs, ignore_index=True)
+                    combined_det["match_int"] = combined_det["match"].map(
+                        {1: 1, 0: 0, "1": 1, "0": 0}
+                    ).fillna(0)
+                    difficulty = (
+                        combined_det.groupby("file_key")["match_int"]
+                        .mean()
+                        .reset_index()
+                        .rename(columns={"file_key": "Contract", "match_int": "Avg Accuracy"})
+                        .sort_values("Avg Accuracy")
+                    )
+                    difficulty["Avg Accuracy"] = difficulty["Avg Accuracy"].round(3)
+                    st.dataframe(
+                        difficulty.set_index("Contract").style.background_gradient(
+                            cmap="RdYlGn", vmin=0, vmax=1
+                        ),
+                        use_container_width=True,
+                    )
+                else:
+                    st.info("No benchmark_detailed.csv found for selected runs.")
+
+                # ── 5. Confusion matrix — binary fields ───────────────────
+                binary_fields = sorted(YES_NO_FIELDS)
+                bin_det_dfs = [
+                    d for d in (
+                        pd.read_csv(EXPERIMENTS_DIR / rn / "results" / "benchmark_detailed.csv")
+                        .assign(run_name=rn)
+                        for rn in selected_ov_runs
+                        if (EXPERIMENTS_DIR / rn / "results" / "benchmark_detailed.csv").exists()
+                    )
+                ]
+                if bin_det_dfs:
+                    st.subheader("Confusion matrix — binary fields")
+                    st.caption(
+                        "TP/FP/FN/TN counts for Yes/No fields. "
+                        "Positive class = Yes. Select a run to inspect."
+                    )
+                    bin_run = st.selectbox(
+                        "Run", options=selected_ov_runs, key="cm_run_select"
+                    )
+                    bin_df = next(
+                        (d for d in bin_det_dfs if d["run_name"].iloc[0] == bin_run), None
+                    )
+                    if bin_df is not None:
+                        bin_df = bin_df[bin_df["field"].isin(binary_fields)].copy()
+                        cm_rows = []
+                        for field in binary_fields:
+                            fdf = bin_df[bin_df["field"] == field]
+                            tp = int(((fdf["pred_norm"] == "Yes") & (fdf["gt_norm"] == "Yes")).sum())
+                            fp = int(((fdf["pred_norm"] == "Yes") & (fdf["gt_norm"] == "No")).sum())
+                            fn = int(((fdf["pred_norm"] == "No")  & (fdf["gt_norm"] == "Yes")).sum())
+                            tn = int(((fdf["pred_norm"] == "No")  & (fdf["gt_norm"] == "No")).sum())
+                            cm_rows.append({"field": field, "TP": tp, "FP": fp, "FN": fn, "TN": tn})
+                        cm_df = pd.DataFrame(cm_rows).set_index("field")
+                        fig_cm = px.imshow(
+                            cm_df,
+                            color_continuous_scale="Blues",
+                            text_auto=True,
+                            aspect="auto",
+                            labels={"x": "Category", "y": "Field", "color": "Count"},
+                            height=max(300, 60 * len(binary_fields) + 100),
+                        )
+                        fig_cm.update_layout(xaxis_tickangle=0)
+                        st.plotly_chart(fig_cm, use_container_width=True)
