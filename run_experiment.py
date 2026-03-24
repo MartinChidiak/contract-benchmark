@@ -436,7 +436,7 @@ def load_llm_with_fallback(config: RunConfig):
         if fallback_len is None:
             fallback_len = min(requested, 40960)
         if fallback_len >= requested:
-            fallback_len = max(40960, requested - 2048)
+            fallback_len = requested - 2048
 
         print(f"   ⚠️  KV cache limit hit. Retrying with max_model_len={fallback_len}.")
         llm = LLM(
