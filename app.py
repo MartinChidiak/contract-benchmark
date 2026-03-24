@@ -106,11 +106,12 @@ st.set_page_config(
 )
 st.title("📄 Contract Extraction Benchmark")
 
-tab_run, tab_results, tab_comparison, tab_overview = st.tabs([
+tab_run, tab_results, tab_comparison, tab_overview, tab_manage = st.tabs([
     "⚙️ Configure & Run",
     "📄 Results",
     "📊 Comparison",
     "📈 Overview",
+    "🗑️ Manage",
 ])
 
 
@@ -382,7 +383,8 @@ with tab_results:
             detailed_csv_path = results_path / "benchmark_detailed.csv"
             if detailed_csv_path.exists():
                 det_df = pd.read_csv(detailed_csv_path)
-                fkey = normalize_filename_key(file_name)
+                # Strip .json first, then normalize (handles "contract.txt.json" → "contract")
+                fkey = normalize_filename_key(file_name.removesuffix(".json"))
                 contract_rows = det_df[det_df["file_key"] == fkey]
                 if not contract_rows.empty:
                     st.subheader("Predicted vs. Ground Truth")
@@ -408,15 +410,6 @@ with tab_results:
                 mime="text/csv",
             )
 
-        # ── Feature 6: Delete experiment ──────────────────────────────────
-        with st.expander("⚠️ Danger zone"):
-            confirmed = st.checkbox(
-                f"Confirm: permanently delete **{exp_name}** and all its results.",
-                key="del_confirm",
-            )
-            if st.button("🗑️ Delete experiment", key="del_btn", disabled=not confirmed):
-                shutil.rmtree(EXPERIMENTS_DIR / exp_name)
-                st.rerun()
 
 
 # ── Load comparison data once (shared by sidebar, Tab 3, and Tab 4) ──────────
@@ -628,6 +621,49 @@ with tab_comparison:
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
+            # ── Quality vs. time scatter ───────────────────────────────────
+            _metric_to_macro = {
+                "Accuracy":  "macro_acc",
+                "Precision": "macro_precision",
+                "Recall":    "macro_recall",
+                "F1":        "macro_f1",
+            }
+            macro_col = _metric_to_macro.get(selected_metric, "macro_acc")
+            if macro_col in filtered.columns and "elapsed_seconds" in filtered.columns:
+                st.subheader(f"Quality vs. time — {selected_metric}")
+                st.caption(
+                    "Each point is one experiment run. "
+                    "Top-left = fast and accurate. Hover for details."
+                )
+                qt_df = filtered[["run_name", "elapsed_seconds", macro_col]].dropna().copy()
+                qt_df["minutes"] = (qt_df["elapsed_seconds"] / 60).round(1)
+                qt_df["model"]  = qt_df["run_name"].apply(lambda x: x.split("__")[0] if "__" in x else x)
+                qt_df["config"] = qt_df["run_name"].apply(lambda x: x.split("__", 1)[1] if "__" in x else x)
+                fig_qt = px.scatter(
+                    qt_df,
+                    x="minutes",
+                    y=macro_col,
+                    color="model",
+                    symbol="config",
+                    hover_name="run_name",
+                    hover_data={"minutes": True, macro_col: ":.3f", "model": False, "config": False},
+                    range_y=[0, 1],
+                    labels={
+                        "minutes": "Elapsed time (min)",
+                        macro_col: selected_metric,
+                        "model":   "Model",
+                        "config":  "Config",
+                    },
+                    height=420,
+                )
+                fig_qt.update_traces(marker=dict(size=13))
+                fig_qt.update_layout(
+                    xaxis=dict(showgrid=True),
+                    yaxis=dict(showgrid=True),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                )
+                st.plotly_chart(fig_qt, use_container_width=True)
+
 
 # ── Tab 4: Overview ───────────────────────────────────────────────────────────
 with tab_overview:
@@ -678,28 +714,6 @@ with tab_overview:
                 )
                 st.plotly_chart(fig_bar, use_container_width=True)
 
-                # ── 2. Radar chart: metric profile per run ────────────────
-                st.subheader("Metric profile (radar)")
-                st.caption("Shows the balance between Accuracy, Precision, Recall, and F1 per run.")
-                radar_labels = [MACRO_METRIC_COLS[c] for c in macro_cols_available]
-                fig_radar = go.Figure()
-                for _, row in ov_df.iterrows():
-                    values = [float(row.get(c) or 0) for c in macro_cols_available]
-                    values += values[:1]  # close polygon
-                    fig_radar.add_trace(go.Scatterpolar(
-                        r=values,
-                        theta=radar_labels + [radar_labels[0]],
-                        fill="toself",
-                        name=row["run_name"],
-                        opacity=0.55,
-                    ))
-                fig_radar.update_layout(
-                    polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
-                    height=520,
-                    legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5),
-                )
-                st.plotly_chart(fig_radar, use_container_width=True)
-
                 # ── 3. Heatmap: per-field F1 across runs ─────────────────
                 f1_field_cols = [f"f1_{f}" for f in FIELDS if f"f1_{f}" in ov_df.columns]
                 if f1_field_cols:
@@ -707,11 +721,14 @@ with tab_overview:
                     st.caption("Cells show F1 score per field per run. Reveals which fields each model handles best.")
                     hm_df = ov_df[["run_name"] + f1_field_cols].set_index("run_name")
                     hm_df.columns = [c.replace("f1_", "") for c in hm_df.columns]
+                    # Sort columns by average F1 ascending (hardest field on the left)
+                    hm_df = hm_df[hm_df.mean().sort_values().index]
                     fig_hm = px.imshow(
                         hm_df,
                         color_continuous_scale="RdYlGn",
                         zmin=0, zmax=1,
                         aspect="auto",
+                        text_auto=".2f",
                         labels={"x": "Field", "y": "Run", "color": "F1"},
                         height=max(300, 60 * len(selected_ov_runs) + 100),
                     )
@@ -719,6 +736,7 @@ with tab_overview:
                         xaxis_tickangle=-35,
                         coloraxis_colorbar=dict(title="F1"),
                     )
+                    fig_hm.update_traces(textfont=dict(size=11))
                     st.plotly_chart(fig_hm, use_container_width=True)
 
                 # ── 4. Contract difficulty ranking ────────────────────────
@@ -742,10 +760,37 @@ with tab_overview:
                         .reset_index()
                         .rename(columns={"file_key": "Contract", "match_int": "Avg Accuracy"})
                         .sort_values("Avg Accuracy")
+                        .reset_index(drop=True)
                     )
                     difficulty["Avg Accuracy"] = difficulty["Avg Accuracy"].round(3)
+
+                    # Dot plot — full distribution, contract name in hover
+                    fig_dot = go.Figure(go.Scatter(
+                        x=difficulty["Avg Accuracy"],
+                        y=difficulty.index,
+                        mode="markers",
+                        marker=dict(
+                            color=difficulty["Avg Accuracy"],
+                            colorscale="RdYlGn",
+                            cmin=0, cmax=1,
+                            size=10,
+                            colorbar=dict(title="Accuracy"),
+                        ),
+                        text=difficulty["Contract"],
+                        hovertemplate="<b>%{text}</b><br>Avg accuracy: %{x:.3f}<extra></extra>",
+                    ))
+                    fig_dot.update_layout(
+                        height=320,
+                        xaxis=dict(title="Avg accuracy", range=[0, 1], showgrid=True),
+                        yaxis=dict(visible=False),
+                        margin=dict(l=10, r=10, t=10, b=40),
+                    )
+                    st.plotly_chart(fig_dot, use_container_width=True)
+
+                    # Table: N hardest contracts
+                    top_n = st.slider("Show N hardest contracts", 5, len(difficulty), 10, key="diff_top_n")
                     st.dataframe(
-                        difficulty.set_index("Contract").style.background_gradient(
+                        difficulty.head(top_n).set_index("Contract").style.background_gradient(
                             cmap="RdYlGn", vmin=0, vmax=1
                         ),
                         use_container_width=True,
@@ -764,10 +809,11 @@ with tab_overview:
                     )
                 ]
                 if bin_det_dfs:
-                    st.subheader("Confusion matrix — binary fields")
+                    st.subheader("Prediction breakdown — binary fields")
                     st.caption(
-                        "TP/FP/FN/TN counts for Yes/No fields. "
-                        "Positive class = Yes. Select a run to inspect."
+                        "Each bar shows how predictions break down per field. "
+                        "Green = correct (TP/TN), red/orange = errors (FP/FN). "
+                        "Positive class = Yes."
                     )
                     bin_run = st.selectbox(
                         "Run", options=selected_ov_runs, key="cm_run_select"
@@ -785,14 +831,118 @@ with tab_overview:
                             fn = int(((fdf["pred_norm"] == "No")  & (fdf["gt_norm"] == "Yes")).sum())
                             tn = int(((fdf["pred_norm"] == "No")  & (fdf["gt_norm"] == "No")).sum())
                             cm_rows.append({"field": field, "TP": tp, "FP": fp, "FN": fn, "TN": tn})
-                        cm_df = pd.DataFrame(cm_rows).set_index("field")
-                        fig_cm = px.imshow(
-                            cm_df,
-                            color_continuous_scale="Blues",
-                            text_auto=True,
-                            aspect="auto",
-                            labels={"x": "Category", "y": "Field", "color": "Count"},
-                            height=max(300, 60 * len(binary_fields) + 100),
+                        cm_df = pd.DataFrame(cm_rows)
+
+                        # Stacked horizontal bar: one bar per field, segments colored by outcome
+                        _CM_COLORS = {
+                            "TP": "#27ae60",   # green  — predicted Yes, was Yes
+                            "FN": "#e67e22",   # orange — predicted No,  was Yes  (missed)
+                            "FP": "#e74c3c",   # red    — predicted Yes, was No   (hallucinated)
+                            "TN": "#95a5a6",   # gray   — predicted No,  was No
+                        }
+                        _CM_LABELS = {
+                            "TP": "TP — correctly found (Yes→Yes)",
+                            "FN": "FN — missed clause (No→Yes)",
+                            "FP": "FP — hallucinated (Yes→No)",
+                            "TN": "TN — correctly absent (No→No)",
+                        }
+                        fig_cm = go.Figure()
+                        for cat in ["TP", "FN", "FP", "TN"]:
+                            fig_cm.add_trace(go.Bar(
+                                name=_CM_LABELS[cat],
+                                y=cm_df["field"],
+                                x=cm_df[cat],
+                                orientation="h",
+                                marker_color=_CM_COLORS[cat],
+                                text=cm_df[cat],
+                                textposition="inside",
+                                insidetextanchor="middle",
+                            ))
+                        fig_cm.update_layout(
+                            barmode="stack",
+                            height=max(300, 60 * len(binary_fields) + 120),
+                            xaxis_title="Number of contracts",
+                            yaxis_title="",
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                            margin=dict(l=10, r=10, t=10, b=10),
                         )
-                        fig_cm.update_layout(xaxis_tickangle=0)
                         st.plotly_chart(fig_cm, use_container_width=True)
+
+
+# ── Tab 5: Manage experiments ─────────────────────────────────────────────────
+with tab_manage:
+    st.subheader("Manage experiments")
+
+    all_exp_dirs = (
+        sorted([d for d in EXPERIMENTS_DIR.iterdir() if d.is_dir()])
+        if EXPERIMENTS_DIR.exists()
+        else []
+    )
+
+    if not all_exp_dirs:
+        st.info("No experiments found.")
+    else:
+        # ── Quick-select helpers ───────────────────────────────────────────
+        all_names   = [d.name for d in all_exp_dirs]
+        all_models  = sorted({n.split("__")[0] for n in all_names if "__" in n})
+        all_configs = sorted({n.split("__", 1)[1] for n in all_names if "__" in n})
+
+        st.caption("Use the filters to pre-select a subset, then adjust individual checkboxes freely.")
+        fcol1, fcol2, fcol3, fcol4, fcol5 = st.columns([2, 2, 1, 1, 1], vertical_alignment="bottom")
+        with fcol1:
+            filter_models  = st.multiselect("Models",  all_models,  default=[], key="mgmt_models",  placeholder="All models")
+        with fcol2:
+            filter_configs = st.multiselect("Configs", all_configs, default=[], key="mgmt_configs", placeholder="All configs")
+        with fcol3:
+            if st.button("Apply", use_container_width=True, help="Select experiments matching the filters above"):
+                active_models  = filter_models  or all_models
+                active_configs = filter_configs or all_configs
+                for n in all_names:
+                    model = n.split("__")[0] if "__" in n else ""
+                    cfg   = n.split("__", 1)[1] if "__" in n else ""
+                    if model in active_models and cfg in active_configs:
+                        st.session_state[f"del_chk_{n}"] = True
+        with fcol4:
+            if st.button("☑️ All", use_container_width=True, help="Select all experiments"):
+                for n in all_names:
+                    st.session_state[f"del_chk_{n}"] = True
+        with fcol5:
+            if st.button("☐ None", use_container_width=True, help="Deselect all"):
+                for n in all_names:
+                    st.session_state[f"del_chk_{n}"] = False
+
+        st.divider()
+
+        # ── Checkbox list ─────────────────────────────────────────────────
+        for exp_dir in all_exp_dirs:
+            n = exp_dir.name
+            model_tag = n.split("__")[0] if "__" in n else "—"
+            cfg_tag   = n.split("__", 1)[1] if "__" in n else "—"
+            size_mb   = sum(f.stat().st_size for f in exp_dir.rglob("*") if f.is_file()) / 1e6
+            label     = f"**{model_tag}** · `{cfg_tag}` · {size_mb:.0f} MB"
+            st.checkbox(label, key=f"del_chk_{n}", value=st.session_state.get(f"del_chk_{n}", False))
+
+        st.divider()
+
+        selected_to_delete = [n for n in all_names if st.session_state.get(f"del_chk_{n}", False)]
+        st.caption(f"{len(selected_to_delete)} of {len(all_names)} experiment(s) selected.")
+
+        if selected_to_delete:
+            confirmed_del = st.checkbox(
+                f"Confirm: permanently delete **{len(selected_to_delete)}** experiment(s).",
+                key="mgmt_confirm",
+            )
+            if st.button(
+                f"🗑️ Delete {len(selected_to_delete)} experiment(s)",
+                type="primary",
+                disabled=not confirmed_del,
+            ):
+                for n in selected_to_delete:
+                    shutil.rmtree(EXPERIMENTS_DIR / n, ignore_errors=True)
+                    # Remove from comparison data
+                    if COMPARISON_CSV.exists():
+                        rows = load_existing_comparison()
+                        rows = [r for r in rows if r.get("run_name") != n]
+                        save_comparison_csv(rows, str(COMPARISON_CSV))
+                st.success(f"Deleted: {', '.join(selected_to_delete)}")
+                st.rerun()
