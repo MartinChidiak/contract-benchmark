@@ -209,6 +209,23 @@ def parse_date(text: str) -> str:
         except ValueError:
             return ""
 
+    # Strip ordinal suffixes (1st, 2nd, 3rd, 4th …) before trying month-name formats
+    text_clean = re.sub(r"(\d+)(st|nd|rd|th)\b", r"\1", text, flags=re.IGNORECASE).strip()
+    for fmt in (
+        "%B %d, %Y",   # January 6, 2016
+        "%B %d %Y",    # January 6 2016
+        "%d %B %Y",    # 6 January 2016
+        "%d %B, %Y",   # 6 January, 2016
+        "%b %d, %Y",   # Jan 6, 2016
+        "%b %d %Y",    # Jan 6 2016
+        "%d %b %Y",    # 6 Jan 2016
+        "%B, %d %Y",   # January, 6 2016
+    ):
+        try:
+            return datetime.strptime(text_clean, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+
     return ""
 
 
