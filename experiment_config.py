@@ -14,9 +14,26 @@ import json
 import hashlib
 
 MODEL_IDS = {
-    "llama31_8b":   "meta-llama/Llama-3.1-8B-Instruct",
-    "qwen25_7b":    "Qwen/Qwen2.5-7B-Instruct",
-    "qwen3_8b":     "Qwen/Qwen3-8B",
+    "llama31_8b":      "meta-llama/Llama-3.1-8B-Instruct",
+    "qwen25_7b":       "Qwen/Qwen2.5-7B-Instruct",
+    "qwen3_8b":        "Qwen/Qwen3-8B",
+    "qwen25_14b_awq":  "Qwen/Qwen2.5-14B-Instruct-AWQ",
+    "qwen25_32b_awq":  "Qwen/Qwen2.5-32B-Instruct-AWQ",
+}
+
+# Contexto máximo por modelo (tokens). Respeta max_position_embeddings y
+# el presupuesto de KV cache disponible en la GPU.
+MODEL_MAX_CONTEXT: dict[str, int] = {
+    "llama31_8b":     45000,   # soporta 128k nativo
+    "qwen25_7b":      30000,   # max_position_embeddings=32768, dejamos margen
+    "qwen3_8b":       30000,   # 32k nativo
+    "qwen25_14b_awq": 30000,   # max_position_embeddings=32768, igual que qwen25_7b
+    "qwen25_32b_awq":  8000,   # ~18GB pesos AWQ; KV cache ajustado — 12k causó OOM
+}
+
+# Prompt override por modelo. "v3_full" se reemplaza por la variante aquí listada.
+MODEL_PROMPT_OVERRIDE: dict[str, str] = {
+    "qwen3_8b": "v3_full_qwen3",   # desactiva thinking mode
 }
 
 # ---------------------------------------------------------------------------
@@ -126,6 +143,9 @@ RENEWAL AND NOTICE PERIOD RULES (critical):
   Extract ONLY the period (e.g. "30 days", "60 days").
   NOTE: this field is often in the SAME paragraph as renewal_term.""",
 }
+
+# Qwen3 needs /no_think to suppress chain-of-thought and return JSON directly.
+PROMPT_VERSIONS["v3_full_qwen3"] = PROMPT_VERSIONS["v3_full"] + "\n/no_think"
 
 
 @dataclass

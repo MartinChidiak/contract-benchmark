@@ -24,7 +24,10 @@ import os
 import sys
 from pathlib import Path
 
-from experiment_config import RunConfig, PROMPT_VERSIONS
+from experiment_config import (
+    RunConfig, PROMPT_VERSIONS,
+    MODEL_IDS, MODEL_MAX_CONTEXT, MODEL_PROMPT_OVERRIDE,
+)
 from run_experiment import run as run_inference
 from benchmark import benchmark as run_benchmark
 
@@ -34,35 +37,15 @@ from benchmark import benchmark as run_benchmark
 # Add or remove models here. Tags are used as directory prefixes.
 # ---------------------------------------------------------------------------
 
-MODEL_IDS: dict[str, str] = {
-    "llama31_8b": "meta-llama/Llama-3.1-8B-Instruct",
-    "qwen25_7b":  "Qwen/Qwen2.5-7B-Instruct",
-    "qwen3_8b":   "Qwen/Qwen3-8B",
-}
-
-# Contexto máximo por modelo — respeta max_position_embeddings de cada uno
-MODEL_MAX_CONTEXT: dict[str, int] = {
-    "llama31_8b": 45000,   # soporta 128k
-    "qwen25_7b":  30000,   # max_position_embeddings=32768, dejamos margen
-    "qwen3_8b":   30000,   # mismo caso, 32k nativo
-}
-
-
-# Qwen3 needs /no_think to suppress chain-of-thought and return JSON directly.
-# We register the variant here so experiment_config validates it correctly.
-PROMPT_VERSIONS["v3_full_qwen3"] = PROMPT_VERSIONS["v3_full"] + "\n/no_think"
-
-# Map each model tag to the prompt version it should use for "v3_full" runs.
-# All other prompt versions are model-agnostic and shared across models.
-MODEL_PROMPT_OVERRIDE: dict[str, str] = {
-    "qwen3_8b": "v3_full_qwen3",   # disables thinking mode
-}
+# MODEL_IDS, MODEL_MAX_CONTEXT, MODEL_PROMPT_OVERRIDE imported from experiment_config
 
 # Models to include in this run — edit to run a subset without deleting configs.
 MODELS_TO_RUN: list[str] = [
     "llama31_8b",
     "qwen25_7b",
     "qwen3_8b",
+    "qwen25_14b_awq",
+    "qwen25_32b_awq",
 ]
 
 
