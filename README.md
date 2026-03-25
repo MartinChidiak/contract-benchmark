@@ -18,7 +18,7 @@ filtro_labels.py        ← Genera ground_truth.csv filtrando master_clauses.csv
 run_all.py              ← Orquestador principal / fuente de la matriz de experimentos
 run_experiment.py       ← Lógica de inferencia con vLLM (un experimento a la vez)
 benchmark.py            ← Evaluación: compara JSONs extraídos vs ground_truth.csv
-experiment_config.py    ← Definición de RunConfig + versiones de prompts
+experiment_config.py    ← Definición de RunConfig, ModelConfig, MODELS, versiones de prompts
 schema.py               ← Schema Pydantic (RealEstateContract) para Guided Decoding
 app.py                  ← UI Streamlit para lanzar corridas y comparar resultados
 Dockerfile              ← Imagen Docker con CUDA 12.6 + vLLM + dependencias UI
@@ -49,14 +49,18 @@ El modelo debe extraer 12 campos de cada contrato, mapeados a columnas del datas
 
 ## Modelos soportados
 
-Configurados en `experiment_config.py` y `run_all.py`:
+Configurados en `experiment_config.py` (dataclass `ModelConfig` + dict `MODELS`):
 
-| Tag | Modelo HuggingFace |
-|---|---|
-| `llama31_8b` | `meta-llama/Llama-3.1-8B-Instruct` |
-| `qwen25_7b` | `Qwen/Qwen2.5-7B-Instruct` |
-| `qwen3_8b` | `Qwen/Qwen3-8B` |
+| Tag | Modelo HuggingFace | VRAM aprox. |
+|---|---|---|
+| `llama31_8b` | `meta-llama/Llama-3.1-8B-Instruct` | ~16 GB |
+| `qwen25_3b` | `Qwen/Qwen2.5-3B-Instruct` | ~6 GB |
+| `qwen25_7b` | `Qwen/Qwen2.5-7B-Instruct` | ~15 GB |
+| `qwen25_14b_awq` | `Qwen/Qwen2.5-14B-Instruct-AWQ` | ~9 GB (INT4) |
+| `qwen25_32b_awq` | `Qwen/Qwen2.5-32B-Instruct-AWQ` | ~18 GB (INT4) |
+| `qwen3_8b` | `Qwen/Qwen3-8B` | ~16 GB |
 
+> Los modelos `*_awq` usan cuantización AWQ (INT4) y requieren la librería `autoawq`.
 > Qwen3 usa una variante de prompt con `/no_think` al final para suprimir el modo chain-of-thought y devolver JSON directamente.
 
 ---
