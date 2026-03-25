@@ -26,7 +26,7 @@ from pathlib import Path
 
 from experiment_config import (
     RunConfig, PROMPT_VERSIONS,
-    MODEL_IDS, MODEL_MAX_CONTEXT, MODEL_PROMPT_OVERRIDE,
+    MODELS, MODEL_IDS, MODEL_MAX_CONTEXT, MODEL_PROMPT_OVERRIDE,
 )
 from run_experiment import run as run_inference
 from benchmark import benchmark as run_benchmark
@@ -39,14 +39,8 @@ from benchmark import benchmark as run_benchmark
 
 # MODEL_IDS, MODEL_MAX_CONTEXT, MODEL_PROMPT_OVERRIDE imported from experiment_config
 
-# Models to include in this run — edit to run a subset without deleting configs.
-MODELS_TO_RUN: list[str] = [
-    "llama31_8b",
-    "qwen25_7b",
-    "qwen3_8b",
-    "qwen25_14b_awq",
-    "qwen25_32b_awq",
-]
+# All registered models by default. Use --models flag to run a subset.
+MODELS_TO_RUN: list[str] = list(MODELS.keys())
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +58,6 @@ BASE_CONFIGS: list[dict] = [
         use_few_shot=False,
         temperature=0.0,
         overlap_chars=800,
-        max_context_tokens=45000,
     ),
 
     # ── Date rules only ───────────────────────────────────────────────────
@@ -75,7 +68,6 @@ BASE_CONFIGS: list[dict] = [
         use_few_shot=False,
         temperature=0.0,
         overlap_chars=800,
-        max_context_tokens=45000,
     ),
 
     # ── Full prompt + few-shot (production config) ────────────────────────
@@ -86,7 +78,6 @@ BASE_CONFIGS: list[dict] = [
         use_few_shot=True,
         temperature=0.0,
         overlap_chars=800,
-        max_context_tokens=45000,
     ),
 
     # ── Full + few-shot, larger overlap ──────────────────────────────────
@@ -97,7 +88,6 @@ BASE_CONFIGS: list[dict] = [
         use_few_shot=True,
         temperature=0.0,
         overlap_chars=1600,
-        max_context_tokens=45000,
     ),
 
     # ── Slight temperature to reduce over-conservatism on binary fields ───
@@ -108,7 +98,6 @@ BASE_CONFIGS: list[dict] = [
         use_few_shot=True,
         temperature=0.2,
         overlap_chars=800,
-        max_context_tokens=45000,
     ),
 ]
 
@@ -132,12 +121,14 @@ EXPERIMENTS: list[RunConfig] = [
     RunConfig(
         **{
             **cfg,
-            "name":        f"{model_tag}__{cfg['name']}",
-            "description": f"[{model_tag}] {cfg['description']}",
-            "prompt_version": _resolve_prompt(cfg["prompt_version"], model_tag),
-            "model_id":    MODEL_IDS[model_tag],
-            "output_dir":  f"./experiments/{model_tag}__{cfg['name']}/results",
-            "max_context_tokens": MODEL_MAX_CONTEXT[model_tag],
+            "name":                    f"{model_tag}__{cfg['name']}",
+            "description":             f"[{model_tag}] {cfg['description']}",
+            "prompt_version":          _resolve_prompt(cfg["prompt_version"], model_tag),
+            "model_id":                MODELS[model_tag].hf_id,
+            "output_dir":              f"./experiments/{model_tag}__{cfg['name']}/results",
+            "max_context_tokens":      MODELS[model_tag].max_context,
+            "gpu_memory_utilization":  MODELS[model_tag].gpu_memory_utilization,
+            "max_output_tokens":       MODELS[model_tag].max_output_tokens,
         }
     )
     for model_tag in MODELS_TO_RUN
