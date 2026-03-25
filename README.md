@@ -115,8 +115,8 @@ docker build -t contract-benchmark .
 
 # Lanzar UI Streamlit
 
-# Contenedor corriendo como usuario no-root (USER 1000:1000 en Dockerfile) — recomendado
-docker run --gpus all -p 8501:8501 \
+# --rm elimina el contenedor automáticamente al cerrarlo (evita acumulación)
+docker run --rm --gpus all -p 8501:8501 \
   -v "$(pwd):/app" \
   -v "$HOME/.cache/huggingface:/hf_cache" \
   -e HF_HOME=/hf_cache \
@@ -124,18 +124,27 @@ docker run --gpus all -p 8501:8501 \
   streamlit run /app/app.py --server.port 8501 --server.address 0.0.0.0
 
 # Lanzar todos los experimentos por CLI
-docker run --gpus all \
+docker run --rm --gpus all \
   -v $(pwd):/app \
-  -e HUGGING_FACE_HUB_TOKEN=$(cat token.txt) \
+  -v "$HOME/.cache/huggingface:/hf_cache" \
+  -e HF_HOME=/hf_cache \
   contract-benchmark \
   python /app/run_all.py
 
 # Solo re-correr benchmark (sin inferencia)
-docker run --gpus all -v $(pwd):/app contract-benchmark \
+docker run --rm --gpus all \
+  -v $(pwd):/app \
+  -v "$HOME/.cache/huggingface:/hf_cache" \
+  -e HF_HOME=/hf_cache \
+  contract-benchmark \
   python /app/run_all.py --only-benchmark
 
 # Solo un subconjunto de modelos
-docker run --gpus all -v $(pwd):/app contract-benchmark \
+docker run --rm --gpus all \
+  -v $(pwd):/app \
+  -v "$HOME/.cache/huggingface:/hf_cache" \
+  -e HF_HOME=/hf_cache \
+  contract-benchmark \
   python /app/run_all.py --models llama31_8b,qwen3_8b
 ```
 
