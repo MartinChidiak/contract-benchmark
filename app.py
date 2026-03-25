@@ -20,7 +20,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from experiment_config import (
-    RunConfig, MODEL_IDS, PROMPT_VERSIONS,
+    RunConfig, MODELS, MODEL_IDS, PROMPT_VERSIONS,
     MODEL_MAX_CONTEXT, MODEL_PROMPT_OVERRIDE,
 )
 from run_experiment import run as run_inference
@@ -236,18 +236,21 @@ with tab_run:
                     if prompt_ver == "v3_full" and model_tag in MODEL_PROMPT_OVERRIDE:
                         prompt_ver = MODEL_PROMPT_OVERRIDE[model_tag]
 
+                    _mc = MODELS[model_tag]
                     config = RunConfig(
-                        name               = run_name,
-                        description        = f"[{model_tag}] {cfg['description']}",
-                        model_id           = MODEL_IDS[model_tag],
-                        input_dir          = input_dir,
-                        output_dir         = str(EXPERIMENTS_DIR / run_name / "results"),
-                        ground_truth_csv   = GROUND_TRUTH_CSV,
-                        prompt_version     = prompt_ver,
-                        use_few_shot       = cfg["use_few_shot"],
-                        temperature        = cfg["temperature"],
-                        overlap_chars      = cfg["overlap_chars"],
-                        max_context_tokens = MODEL_MAX_CONTEXT[model_tag],
+                        name                   = run_name,
+                        description            = f"[{model_tag}] {cfg['description']}",
+                        model_id               = _mc.hf_id,
+                        input_dir              = input_dir,
+                        output_dir             = str(EXPERIMENTS_DIR / run_name / "results"),
+                        ground_truth_csv       = GROUND_TRUTH_CSV,
+                        prompt_version         = prompt_ver,
+                        use_few_shot           = cfg["use_few_shot"],
+                        temperature            = cfg["temperature"],
+                        overlap_chars          = cfg["overlap_chars"],
+                        max_context_tokens     = _mc.max_context,
+                        gpu_memory_utilization = _mc.gpu_memory_utilization,
+                        max_output_tokens      = _mc.max_output_tokens,
                     )
 
                     buf = io.StringIO()
@@ -608,19 +611,40 @@ with tab_comparison:
                     var_name="field",
                     value_name="value",
                 )
-                fig = px.bar(
-                    melted,
-                    x="field",
-                    y="value",
-                    color="run_name",
-                    barmode="group",
-                    range_y=[0, 1],
-                    labels={"value": selected_metric, "field": "Field", "run_name": "Run"},
-                    height=500,
-                )
+                melted["model"]  = melted["run_name"].apply(lambda x: x.split("__")[0] if "__" in x else x)
+                melted["config"] = melted["run_name"].apply(lambda x: x.split("__", 1)[1] if "__" in x else x)
+
+                _palette     = px.colors.qualitative.Plotly
+                _all_models  = sorted(melted["model"].unique())
+                _model_color = {m: _palette[i % len(_palette)] for i, m in enumerate(_all_models)}
+                _seen        = set()
+
+                fig = go.Figure()
+                for run in melted["run_name"].unique():
+                    rdf    = melted[melted["run_name"] == run]
+                    model  = rdf["model"].iloc[0]
+                    config = rdf["config"].iloc[0]
+                    fig.add_trace(go.Bar(
+                        name=model,
+                        x=rdf["field"],
+                        y=rdf["value"],
+                        marker_color=_model_color[model],
+                        legendgroup=model,
+                        showlegend=model not in _seen,
+                        hovertemplate=(
+                            f"<b>{run}</b><br>"
+                            f"Config: {config}<br>"
+                            "%{x}: %{y:.3f}<extra></extra>"
+                        ),
+                    ))
+                    _seen.add(model)
+
                 fig.update_layout(
-                    xaxis_tickangle=-35,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    barmode="group",
+                    yaxis=dict(range=[0, 1], title=selected_metric),
+                    xaxis=dict(title="Field", tickangle=-35),
+                    legend=dict(title="Model", orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    height=500,
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
