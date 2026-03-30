@@ -80,19 +80,29 @@ No se ejecuta directamente — es importado por `run_experiment.py`.
 
 ### `experiment_config.py`
 
-Define dos cosas:
+Es la **única fuente de verdad** de configuración del proyecto. Define tres cosas:
 
-1. **`PROMPT_VERSIONS`** — diccionario con las versiones de prompt disponibles:
+1. **`ModelConfig`** — dataclass que encapsula todo lo relacionado a un modelo:
+   - `hf_id`: nombre en HuggingFace
+   - `max_context`: tokens máximos de contexto (respeta `max_position_embeddings` del modelo)
+   - `gpu_memory_utilization`: fracción de VRAM para vLLM
+   - `max_output_tokens`: tokens máximos a generar
+   - `prompt_override`: variante de prompt específica del modelo (ej. `/no_think` para Qwen3)
+
+2. **`MODELS`** — diccionario de todos los modelos registrados. Para agregar un modelo nuevo basta con añadir una entrada aquí; el resto del sistema lo toma automáticamente.
+
+3. **`PROMPT_VERSIONS`** — diccionario con las versiones de prompt disponibles:
    - `v1_baseline`: prompt mínimo
    - `v2_with_date_rules`: agrega reglas de extracción de fechas
    - `v3_full`: reglas completas (fechas, anti-assignment, Yes/No, renovación)
+   - `v3_full_qwen3`: igual a `v3_full` con `/no_think` al final (suprime chain-of-thought en Qwen3)
 
-2. **`RunConfig`** — dataclass con todos los parámetros de un experimento:
+4. **`RunConfig`** — dataclass con todos los parámetros de un experimento:
    - modelo, directorio de entrada/salida, versión de prompt, few-shot, temperatura, overlap, context window
 
    Cada `RunConfig` es completamente serializable a JSON (`config.json`), lo que garantiza reproducibilidad total.
 
-No se ejecuta directamente — es importado por `run_all.py` y `run_experiment.py`.
+No se ejecuta directamente — es importado por `run_all.py`, `run_experiment.py` y `app.py`.
 
 ---
 
@@ -103,9 +113,9 @@ No se ejecuta directamente — es importado por `run_all.py` y `run_experiment.p
 Es el **orquestador**. Define la matriz completa de experimentos cruzando modelos × configuraciones y los ejecuta en secuencia.
 
 **Qué contiene:**
-- `MODEL_IDS` — mapeo de tag corto a nombre HuggingFace (ej. `llama31_8b` → `meta-llama/Llama-3.1-8B-Instruct`)
+- `MODELS_TO_RUN` — lista de tags de modelos a correr (tomada de `MODELS` en `experiment_config.py`)
 - `BASE_CONFIGS` — lista de configuraciones de prompt/parámetros
-- `EXPERIMENTS` — producto cartesiano de modelos × configs, genera un `RunConfig` por combinación
+- `EXPERIMENTS` — producto cartesiano de modelos × configs, genera un `RunConfig` por combinación; cada RunConfig toma `hf_id`, `max_context`, `gpu_memory_utilization` y `max_output_tokens` directamente del `ModelConfig` correspondiente
 - `load_benchmark_summary()` — lee `benchmark_detailed.csv` y calcula todas las métricas (macro_acc, micro_acc, precision, recall, F1)
 
 **Flujo interno:**
@@ -212,8 +222,12 @@ Interfaz web que envuelve todo el flujo anterior. Internamente hace exactamente 
 ```bash
 streamlit run app.py
 # o desde Docker:
-docker run --gpus all -v $(pwd):/app -p 8501:8501 contract-benchmark \
-  streamlit run /app/app.py --server.address 0.0.0.0
+docker run --rm --gpus all -p 8501:8501 \
+  -v "$(pwd):/app" \
+  -v "$HOME/.cache/huggingface:/hf_cache" \
+  -e HF_HOME=/hf_cache \
+  contract-benchmark \
+  streamlit run /app/app.py --server.port 8501 --server.address 0.0.0.0
 ```
 
 ---
