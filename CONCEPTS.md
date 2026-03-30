@@ -10,7 +10,7 @@ Dataset público de 510 contratos legales reales anotados manualmente por abogad
 ---
 
 ### LLM instruction-tuned
-Un modelo de lenguaje grande entrenado en dos etapas: primero aprende a predecir texto en general (pretraining), luego es ajustado para seguir instrucciones (fine-tuning con RLHF o similar). Los modelos usados (`Llama-3.1-8B-Instruct`, `Qwen2.5-7B-Instruct`, `Qwen3-8B`) son todos instruction-tuned, lo que les permite recibir un prompt con reglas y devolver una extracción estructurada en lugar de continuar el texto libremente.
+Un modelo de lenguaje grande entrenado en dos etapas: primero aprende a predecir texto en general (pretraining), luego es ajustado para seguir instrucciones (fine-tuning con RLHF o similar). Los modelos usados (`Llama-3.1-8B-Instruct`, `Qwen2.5-3B/7B/14B/32B-Instruct`, `Qwen3-8B`) son todos instruction-tuned, lo que les permite recibir un prompt con reglas y devolver una extracción estructurada en lugar de continuar el texto libremente.
 
 ---
 
@@ -31,6 +31,11 @@ Librería de validación de datos en Python. En este proyecto define el schema d
 
 ### Chat template
 Formato de tokens especiales que cada modelo espera para distinguir los roles del prompt (sistema, usuario, asistente). Por ejemplo, Llama-3 usa `<|begin_of_text|><|start_header_id|>system<|end_header_id|>...` mientras que Qwen usa `<|im_start|>system\n...`. `run_experiment.py` aplica automáticamente el template nativo de cada modelo usando su tokenizer, lo que hace el código compatible con cualquier modelo instruction-tuned sin modificaciones.
+
+---
+
+### AWQ (Activation-aware Weight Quantization)
+Técnica de cuantización que reduce los pesos del modelo de FP16 (16 bits por peso) a INT4 (4 bits), disminuyendo el tamaño en memoria ~4x con pérdida de calidad mínima. A diferencia de cuantización uniforme, AWQ identifica qué pesos son más importantes para la activación del modelo y los preserva con mayor precisión. En el proyecto se usan `Qwen2.5-14B-AWQ` (~9 GB) y `Qwen2.5-32B-AWQ` (~18 GB), modelos que sin cuantizar requerirían ~28 GB y ~64 GB respectivamente — fuera del rango de una RTX 5090 (24 GB).
 
 ---
 
