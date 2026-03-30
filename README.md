@@ -163,7 +163,7 @@ streamlit run app.py
 
 ## UI Streamlit
 
-La aplicación tiene 4 solapas:
+La aplicación tiene 5 solapas:
 
 | Solapa | Contenido |
 |---|---|
@@ -171,6 +171,7 @@ La aplicación tiene 4 solapas:
 | **Results** | Resultados detallados del último experimento corrido |
 | **Comparison** | Tabla comparativa entre experimentos con filtro por métrica (Accuracy / Precision / Recall / F1) y selector de campos |
 | **Overview** | Gráficos de alto nivel: barras agrupadas, radar chart y heatmap de F1 por campo |
+| **Manage Experiments** | Listado de todos los experimentos con filtros por modelo y config, checkboxes para seleccionar y botón de borrado masivo |
 
 Un sidebar compartido entre Comparison y Overview permite filtrar por modelos y configuraciones. Al final del sidebar hay un expander con las definiciones de cada métrica.
 
