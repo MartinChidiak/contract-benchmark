@@ -30,7 +30,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
     streamlit \
     pandas \
     matplotlib \
-    plotly
+    plotly \
+    scikit-learn
 
 # Correr como usuario no-root con el mismo UID/GID del host WSL.
 # Los archivos del venv son world-readable (755/644) — no requieren chown.

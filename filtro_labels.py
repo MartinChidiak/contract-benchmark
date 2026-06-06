@@ -4,7 +4,7 @@ import os
 # 1. Path configuration
 # Ejecutar desde el root del proyecto: python filtro_labels.py
 ruta_csv_maestro = "./master_clauses.csv"
-ruta_carpeta_filtrada = "./Dataset_Filtrado_Tesis"
+ruta_carpeta_filtrada = "./Dataset_CUAD_Completo"
 ruta_csv_salida = "./ground_truth.csv"
 
 # 2. Columns to extract from master_clauses.csv
