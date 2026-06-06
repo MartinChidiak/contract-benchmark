@@ -28,7 +28,7 @@ from benchmark import benchmark as run_benchmark, normalize_filename_key, YES_NO
 from run_all import load_benchmark_summary, save_comparison_csv, FIELDS
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-DEFAULT_INPUT_DIR = "./Dataset_Filtrado_Tesis"
+DEFAULT_INPUT_DIR = "./Dataset_CUAD_Completo"
 GROUND_TRUTH_CSV  = "./ground_truth.csv"
 EXPERIMENTS_DIR   = Path("./experiments")
 COMPARISON_CSV    = EXPERIMENTS_DIR / "comparison.csv"
@@ -194,13 +194,16 @@ with tab_run:
                     for f in uploaded_files:
                         (Path(tmp_dir) / f.name).write_bytes(f.read())
                     input_dir = tmp_dir
+                    split_filter = ""   # uploaded files are not in split.csv
                 else:
                     input_dir = DEFAULT_INPUT_DIR
+                    split_filter = "dev"  # restrict to development set only
 
                 st.session_state.run_params   = {
                     "active_models":  active_models,
                     "active_cfgs":    active_cfgs,
                     "input_dir":      input_dir,
+                    "split_filter":   split_filter,
                     "tmp_dir":        tmp_dir,
                     "benchmark_only": bool(bench_btn),
                 }
@@ -216,6 +219,7 @@ with tab_run:
             active_models  = params["active_models"]
             active_cfgs    = params["active_cfgs"]
             input_dir      = params["input_dir"]
+            split_filter   = params.get("split_filter", "dev")
             tmp_dir        = params["tmp_dir"]
             benchmark_only = params.get("benchmark_only", False)
 
@@ -244,6 +248,7 @@ with tab_run:
                         input_dir              = input_dir,
                         output_dir             = str(EXPERIMENTS_DIR / run_name / "results"),
                         ground_truth_csv       = GROUND_TRUTH_CSV,
+                        split_filter           = split_filter,
                         prompt_version         = prompt_ver,
                         use_few_shot           = cfg["use_few_shot"],
                         temperature            = cfg["temperature"],

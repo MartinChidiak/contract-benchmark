@@ -196,9 +196,11 @@ class RunConfig:
     description: str = ""
 
     # --- Paths ---
-    input_dir: str = "./Dataset_Filtrado_Tesis"
+    input_dir: str = "./Dataset_CUAD_Completo"
     output_dir: str = "./experiments/run_001/results"
     ground_truth_csv: str = "./ground_truth.csv"
+    split_csv: str = "./split.csv"       # path to the dev/holdout split record
+    split_filter: str = "dev"            # "dev" | "holdout" | "" (empty = all contracts)
 
     # --- Model ---
     model_id: str = "meta-llama/Llama-3.1-8B-Instruct"

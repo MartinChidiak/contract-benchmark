@@ -488,7 +488,22 @@ def run(config: RunConfig) -> dict:
         raise FileNotFoundError(f"Input dir not found: {config.input_dir}")
 
     filenames = [f for f in os.listdir(config.input_dir) if f.endswith(".txt")]
-    print(f"📊 Found {len(filenames)} .txt files")
+    print(f"📊 Found {len(filenames)} .txt files in input_dir")
+
+    # Filter by split (dev / holdout) if a split CSV and filter are configured
+    if config.split_filter and config.split_csv and os.path.exists(config.split_csv):
+        import csv as _csv
+        with open(config.split_csv, encoding="utf-8") as _f:
+            split_set = {
+                row["filename"]
+                for row in _csv.DictReader(_f)
+                if row["split"] == config.split_filter
+            }
+        before = len(filenames)
+        filenames = [f for f in filenames if f in split_set]
+        print(f"📂 Split filter '{config.split_filter}': {before} → {len(filenames)} contracts")
+    elif config.split_filter:
+        print(f"⚠️  split_filter='{config.split_filter}' set but split_csv not found — processing all contracts")
 
     pending = [
         f for f in filenames
