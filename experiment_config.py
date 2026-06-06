@@ -32,7 +32,7 @@ MODELS: dict[str, ModelConfig] = {
     # ── Llama ─────────────────────────────────────────────────────────────
     "llama31_8b": ModelConfig(
         hf_id="meta-llama/Llama-3.1-8B-Instruct",
-        max_context=45000,              # supports 128k natively
+        max_context=28000,              # ~29k available with CUDAGraphs at gpu_util=0.90
     ),
     # ── Qwen 2.5 ──────────────────────────────────────────────────────────
     "qwen25_3b": ModelConfig(
@@ -41,7 +41,7 @@ MODELS: dict[str, ModelConfig] = {
     ),
     "qwen25_7b": ModelConfig(
         hf_id="Qwen/Qwen2.5-7B-Instruct",
-        max_context=30000,              # max_position_embeddings=32768
+        max_context=28000,              # ~29k available with CUDAGraphs at gpu_util=0.90
     ),
     "qwen25_14b_awq": ModelConfig(
         hf_id="Qwen/Qwen2.5-14B-Instruct-AWQ",
@@ -55,7 +55,7 @@ MODELS: dict[str, ModelConfig] = {
     # ── Qwen 3 ────────────────────────────────────────────────────────────
     "qwen3_8b": ModelConfig(
         hf_id="Qwen/Qwen3-8B",
-        max_context=30000,              # 32k native
+        max_context=28000,              # ~29k available with CUDAGraphs at gpu_util=0.90
         prompt_override="v3_full_qwen3",  # disables thinking mode (/no_think)
     ),
 }

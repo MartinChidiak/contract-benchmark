@@ -434,22 +434,41 @@ def load_llm_with_fallback(config: RunConfig):
         )
         return llm, tokenizer, requested
     except Exception as first_error:
-        error_text  = str(first_error)
+        # The real ValueError lives in the EngineCore subprocess; str(first_error)
+        # often just says "Engine core initialization failed." without the number.
+        # Try to parse it anyway, then fall back to 65% of requested (accounts for
+        # CUDAGraph buffer overhead that wasn't needed with enforce_eager=True).
+        error_text = str(first_error)
         fallback_len = _extract_estimated_max_len(error_text)
         if fallback_len is None:
-            fallback_len = min(requested, 40960)
+            fallback_len = (int(requested * 0.65) // 256) * 256
         if fallback_len >= requested:
             fallback_len = requested - 2048
 
         print(f"   ⚠️  KV cache limit hit. Retrying with max_model_len={fallback_len}.")
-        llm = LLM(
-            model=config.model_id,
-            dtype="bfloat16",
-            max_model_len=fallback_len,
-            gpu_memory_utilization=gpu_util,
-            disable_log_stats=False,
-        )
-        return llm, tokenizer, fallback_len
+        try:
+            llm = LLM(
+                model=config.model_id,
+                dtype="bfloat16",
+                max_model_len=fallback_len,
+                gpu_memory_utilization=gpu_util,
+                disable_log_stats=False,
+            )
+            return llm, tokenizer, fallback_len
+        except Exception as second_error:
+            error_text2 = str(second_error)
+            fallback_len2 = _extract_estimated_max_len(error_text2)
+            if fallback_len2 is None:
+                fallback_len2 = (fallback_len * 3 // 4 // 256) * 256
+            print(f"   ⚠️  Still too large. Retrying with max_model_len={fallback_len2}.")
+            llm = LLM(
+                model=config.model_id,
+                dtype="bfloat16",
+                max_model_len=fallback_len2,
+                gpu_memory_utilization=gpu_util,
+                disable_log_stats=False,
+            )
+            return llm, tokenizer, fallback_len2
 
 
 def process_batch(llm, sampling_params, items: list[tuple]) -> list[str]:
