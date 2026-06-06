@@ -420,6 +420,9 @@ def load_llm_with_fallback(config: RunConfig):
         trust_remote_code=True,   # needed for some Qwen variants
     )
 
+    if not VLLM_AVAILABLE:
+        raise RuntimeError("vLLM no está disponible — verificá la instalación en el container.")
+
     print(f"   Attempt 1: max_model_len={requested}, gpu_memory_utilization={gpu_util:.2f}")
     try:
         llm = LLM(
@@ -427,6 +430,7 @@ def load_llm_with_fallback(config: RunConfig):
             dtype="bfloat16",
             max_model_len=requested,
             gpu_memory_utilization=gpu_util,
+            enforce_eager=True,
             disable_log_stats=False,
         )
         return llm, tokenizer, requested
@@ -444,6 +448,7 @@ def load_llm_with_fallback(config: RunConfig):
             dtype="bfloat16",
             max_model_len=fallback_len,
             gpu_memory_utilization=gpu_util,
+            enforce_eager=True,
             disable_log_stats=False,
         )
         return llm, tokenizer, fallback_len
