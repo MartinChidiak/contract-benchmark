@@ -430,7 +430,6 @@ def load_llm_with_fallback(config: RunConfig):
             dtype="bfloat16",
             max_model_len=requested,
             gpu_memory_utilization=gpu_util,
-            enforce_eager=True,
             disable_log_stats=False,
         )
         return llm, tokenizer, requested
@@ -448,7 +447,6 @@ def load_llm_with_fallback(config: RunConfig):
             dtype="bfloat16",
             max_model_len=fallback_len,
             gpu_memory_utilization=gpu_util,
-            enforce_eager=True,
             disable_log_stats=False,
         )
         return llm, tokenizer, fallback_len
