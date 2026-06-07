@@ -256,6 +256,8 @@ with tab_run:
                         max_context_tokens     = _mc.max_context,
                         gpu_memory_utilization = _mc.gpu_memory_utilization,
                         max_output_tokens      = _mc.max_output_tokens,
+                        enforce_eager              = _mc.enforce_eager,
+                        vllm_use_v2_model_runner   = _mc.vllm_use_v2_model_runner,
                     )
 
                     buf = io.StringIO()

@@ -346,21 +346,48 @@ def merge_results(results: list[dict]) -> dict:
     text_fields = {"parties", "renewal_term", "notice_period_to_terminate_renewal", "governing_law"}
     categorical_fields = YES_NO_FIELDS | {"anti_assignment"}
 
+    # When a contract is heavily fragmented (>5 chunks), majority vote buries clauses
+    # that appear in only a few chunks. Switch to evidence-first strategies instead.
+    many_chunks = len(results) > 5
+
     merged = {}
 
-    # Categorical fields: majority voting, positional tiebreak (earlier chunk wins).
-    for key in categorical_fields:
+    # Yes/No fields.
+    # many_chunks: any "Yes" wins — the clause exists if any chunk found it.
+    # few chunks:  majority vote with positional tiebreak (original behaviour).
+    for key in YES_NO_FIELDS:
         non_empty = [r[key] for r in results if r.get(key) not in EMPTY]
         if not non_empty:
-            merged[key] = results[0].get(key) if results else None
+            merged[key] = results[0].get(key) if results else "No"
+        elif many_chunks:
+            merged[key] = "Yes" if "Yes" in non_empty else non_empty[0]
         else:
             counts = Counter(non_empty)
             max_count = max(counts.values())
             candidates = {v for v, c in counts.items() if c == max_count}
-            # Tiebreak: first non-empty value by chunk position.
             merged[key] = next(v for v in non_empty if v in candidates)
 
-    # Text and other fields: first non-null wins; concatenate if text field differs.
+    # anti_assignment.
+    # many_chunks: any specific value wins over "Not Mentioned"; majority among specifics.
+    # few chunks:  original majority vote across all values.
+    aa_all      = [r["anti_assignment"] for r in results if r.get("anti_assignment") is not None]
+    aa_specific = [v for v in aa_all if v not in EMPTY]
+    if not aa_all:
+        merged["anti_assignment"] = "Not Mentioned"
+    elif many_chunks and aa_specific:
+        counts = Counter(aa_specific)
+        max_count = max(counts.values())
+        candidates = {v for v, c in counts.items() if c == max_count}
+        merged["anti_assignment"] = next(v for v in aa_specific if v in candidates)
+    else:
+        pool = aa_specific if aa_specific else aa_all
+        counts = Counter(pool)
+        max_count = max(counts.values())
+        candidates = {v for v, c in counts.items() if c == max_count}
+        merged["anti_assignment"] = next(v for v in pool if v in candidates)
+
+    # Text and other fields: first non-null wins.
+    # For text fields, deduplicate before appending to avoid "A | A | A" repetition.
     for result in results:
         for key, value in result.items():
             if key in categorical_fields:
@@ -375,7 +402,9 @@ def merge_results(results: list[dict]) -> dict:
                       and current not in EMPTY
                       and value not in EMPTY
                       and value != current):
-                    merged[key] = f"{current} | {value}"
+                    existing = [s.strip() for s in current.split(" | ")]
+                    if value.strip() not in existing:
+                        merged[key] = f"{current} | {value}"
     return merged
 
 
@@ -408,9 +437,10 @@ def load_llm_with_fallback(config: RunConfig):
     Both use the same model_id and HF_TOKEN, so no extra download occurs
     if the model is already cached.
     """
-    requested  = config.max_context_tokens
-    gpu_util   = config.gpu_memory_utilization
-    token      = os.environ.get("HF_TOKEN")
+    requested     = config.max_context_tokens
+    gpu_util      = config.gpu_memory_utilization
+    enforce_eager = config.enforce_eager
+    token         = os.environ.get("HF_TOKEN")
 
     # Load tokenizer once — lightweight, no GPU memory used
     print(f"   Loading tokenizer for {config.model_id} ...")
@@ -423,52 +453,68 @@ def load_llm_with_fallback(config: RunConfig):
     if not VLLM_AVAILABLE:
         raise RuntimeError("vLLM no está disponible — verificá la instalación en el container.")
 
-    print(f"   Attempt 1: max_model_len={requested}, gpu_memory_utilization={gpu_util:.2f}")
-    try:
-        llm = LLM(
+    # Apply VLLM_USE_V2_MODEL_RUNNER override if the model needs it (e.g. Qwen3 on WSL2).
+    # The env var is read by the EngineCore subprocess at spawn time, so it must be set
+    # in the parent process before each LLM() call.
+    _v2_key  = "VLLM_USE_V2_MODEL_RUNNER"
+    _v2_prev = os.environ.get(_v2_key)
+    if config.vllm_use_v2_model_runner is not None:
+        os.environ[_v2_key] = "1" if config.vllm_use_v2_model_runner else "0"
+
+    def _make_llm(max_len: int) -> "LLM":
+        return LLM(
             model=config.model_id,
             dtype="bfloat16",
-            max_model_len=requested,
+            max_model_len=max_len,
             gpu_memory_utilization=gpu_util,
+            enforce_eager=enforce_eager,
             disable_log_stats=False,
         )
-        return llm, tokenizer, requested
-    except Exception as first_error:
-        # The real ValueError lives in the EngineCore subprocess; str(first_error)
-        # often just says "Engine core initialization failed." without the number.
-        # Try to parse it anyway, then fall back to 65% of requested (accounts for
-        # CUDAGraph buffer overhead that wasn't needed with enforce_eager=True).
-        error_text = str(first_error)
-        fallback_len = _extract_estimated_max_len(error_text)
-        if fallback_len is None:
-            fallback_len = (int(requested * 0.65) // 256) * 256
-        if fallback_len >= requested:
-            fallback_len = requested - 2048
 
-        print(f"   ⚠️  KV cache limit hit. Retrying with max_model_len={fallback_len}.")
+    try:
+        print(f"   Attempt 1: max_model_len={requested}, gpu_memory_utilization={gpu_util:.2f}, enforce_eager={enforce_eager}")
         try:
-            llm = LLM(
-                model=config.model_id,
-                dtype="bfloat16",
-                max_model_len=fallback_len,
-                gpu_memory_utilization=gpu_util,
-                disable_log_stats=False,
-            )
-            return llm, tokenizer, fallback_len
-        except Exception as second_error:
-            error_text2 = str(second_error)
-            fallback_len2 = _extract_estimated_max_len(error_text2)
-            if fallback_len2 is None:
-                fallback_len2 = (fallback_len * 3 // 4 // 256) * 256
-            print(f"   ⚠️  Still too large. Retrying with max_model_len={fallback_len2}.")
-            llm = LLM(
-                model=config.model_id,
-                dtype="bfloat16",
-                max_model_len=fallback_len2,
-                gpu_memory_utilization=gpu_util,
-                disable_log_stats=False,
-            )
-            return llm, tokenizer, fallback_len2
+            llm = _make_llm(requested)
+            return llm, tokenizer, requested
+        except Exception as first_error:
+            # The real ValueError lives in the EngineCore subprocess; str(first_error)
+            # often just says "Engine core initialization failed." without the number.
+            # Try to parse it anyway, then fall back to 65% of requested (accounts for
+            # CUDAGraph buffer overhead that wasn't needed with enforce_eager=True).
+            error_text = str(first_error)
+            fallback_len = _extract_estimated_max_len(error_text)
+            if fallback_len is None:
+                fallback_len = (int(requested * 0.65) // 256) * 256
+            if fallback_len >= requested:
+                fallback_len = requested - 2048
+
+            print(f"   ⚠️  KV cache limit hit. Retrying with max_model_len={fallback_len}.")
+            try:
+                import torch; torch.cuda.empty_cache()
+            except Exception:
+                pass
+            try:
+                llm = _make_llm(fallback_len)
+                return llm, tokenizer, fallback_len
+            except Exception as second_error:
+                error_text2 = str(second_error)
+                fallback_len2 = _extract_estimated_max_len(error_text2)
+                if fallback_len2 is None:
+                    fallback_len2 = (fallback_len * 3 // 4 // 256) * 256
+                print(f"   ⚠️  Still too large. Retrying with max_model_len={fallback_len2}.")
+                try:
+                    import torch; torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                llm = _make_llm(fallback_len2)
+                return llm, tokenizer, fallback_len2
+    finally:
+        # Restore env var so subsequent model loads in the same process are not affected.
+        if config.vllm_use_v2_model_runner is not None:
+            if _v2_prev is None:
+                os.environ.pop(_v2_key, None)
+            else:
+                os.environ[_v2_key] = _v2_prev
 
 
 def process_batch(llm, sampling_params, items: list[tuple]) -> list[str]:
@@ -539,10 +585,24 @@ def run(config: RunConfig) -> dict:
 
     # llm, tokenizer, active_ctx — tokenizer added here
     llm, tokenizer, active_ctx = load_llm_with_fallback(config)
-    input_budget = active_ctx - config.max_output_tokens - 512
+
+    # ------------------------------------------------------------------
+    # Helper: messages → final prompt string for this model
+    # Defined here (not at module level) so tokenizer is in closure scope.
+    # ------------------------------------------------------------------
+    def make_prompt(text: str, chunk_info: str = "") -> str:
+        messages = build_messages(config, text, chunk_info)
+        return apply_chat_template(messages, tokenizer, config)
+
     sample_texts = [Path(config.input_dir, f).read_text(encoding="utf-8") for f in pending[:5]]
     lang_factor  = compute_lang_factor(tokenizer, sample_texts)
+
+    # Measure actual prompt overhead by tokenizing an empty-text prompt.
+    # The fixed 512-token guess is too small when few-shot examples are included.
+    _overhead_tokens = len(tokenizer.encode(make_prompt(""), add_special_tokens=False))
+    input_budget = active_ctx - config.max_output_tokens - _overhead_tokens - 64
     print(f"📐 lang_factor: {lang_factor:.2f} chars/token (computed from {len(sample_texts)} samples, config default was {config.lang_factor})")
+    print(f"📐 Prompt overhead: {_overhead_tokens} tokens (system prompt + few-shot + template)")
     char_limit   = estimate_char_limit(input_budget, lang_factor)
     print(f"📏 Max chunk: {char_limit:,} chars (~{input_budget:,} tokens)")
 
@@ -554,14 +614,6 @@ def run(config: RunConfig) -> dict:
             json=RealEstateContract.model_json_schema()
         ),
     )
-
-    # ------------------------------------------------------------------
-    # Helper: messages → final prompt string for this model
-    # Defined here (not at module level) so tokenizer is in closure scope.
-    # ------------------------------------------------------------------
-    def make_prompt(text: str, chunk_info: str = "") -> str:
-        messages = build_messages(config, text, chunk_info)
-        return apply_chat_template(messages, tokenizer, config)
 
     # Log chat template once per run
     if tokenizer.chat_template:
@@ -606,45 +658,55 @@ def run(config: RunConfig) -> dict:
                 fallidos += 1
 
     # --- Long contracts ---
+    # Processed in groups so each group's results are saved immediately.
+    # If the run is interrupted, already-saved contracts are skipped on resume.
     if long_contracts:
-        print(f"\n--- Long contracts: {len(long_contracts)} ---")
-        all_chunks = []
-        for filename, chunks in long_contracts:
-            total = len(chunks)
-            for i, chunk in enumerate(chunks):
-                prompt = make_prompt(chunk, f"part {i+1} of {total}")
-                all_chunks.append((filename, i, total, prompt))
+        GROUP_SIZE = 25
+        groups = [long_contracts[i:i + GROUP_SIZE]
+                  for i in range(0, len(long_contracts), GROUP_SIZE)]
+        total_chunks = sum(len(chunks) for _, chunks in long_contracts)
+        print(f"\n--- Long contracts: {len(long_contracts)} contracts, "
+              f"{total_chunks} chunks, {len(groups)} groups of ≤{GROUP_SIZE} ---")
 
-        print(f"   Total chunks: {len(all_chunks)}")
-        batch_items = [(x[0], x[3]) for x in all_chunks]
-        outputs     = process_batch(llm, sampling_params, batch_items)
+        for g_idx, group in enumerate(groups):
+            group_chunks = []
+            for filename, chunks in group:
+                total = len(chunks)
+                for i, chunk in enumerate(chunks):
+                    prompt = make_prompt(chunk, f"part {i+1} of {total}")
+                    group_chunks.append((filename, i, total, prompt))
 
-        chunks_by_file: dict[str, list[dict]] = {}
-        for (filename, chunk_idx, total, _), generated in zip(all_chunks, outputs):
-            data_dict = parse_output(generated)
-            if data_dict is None:
-                print(f"⚠️  Chunk {chunk_idx+1}/{total} invalid in {filename}")
-                # Guardar output crudo para diagnóstico
-                raw_path = Path(config.output_dir, f"CHUNK_ERROR_{chunk_idx+1}of{total}_{filename}.raw")
-                raw_path.write_text(generated)
-                continue            
-            normalized = normalize_extracted_data(data_dict)
-            chunks_by_file.setdefault(filename, []).append(normalized)
+            print(f"\n   Group {g_idx + 1}/{len(groups)} "
+                  f"({len(group)} contracts, {len(group_chunks)} chunks)...")
+            batch_items = [(x[0], x[3]) for x in group_chunks]
+            outputs     = process_batch(llm, sampling_params, batch_items)
 
-        for filename, chunk_results in chunks_by_file.items():
-            if not chunk_results:
-                fallidos += 1
-                continue
-            try:
-                merged    = merge_results(chunk_results)
-                validated = RealEstateContract(**merged)
-                out = Path(config.output_dir, f"{filename}.json")
-                out.write_text(json.dumps(validated.model_dump(), indent=4, ensure_ascii=False))
-                print(f"✅ {filename} ({len(chunk_results)} chunks merged)")
-                exitosos += 1
-            except Exception as e:
-                print(f"❌ Merge error {filename}: {e}")
-                fallidos += 1
+            chunks_by_file: dict[str, list[dict]] = {}
+            for (filename, chunk_idx, total, _), generated in zip(group_chunks, outputs):
+                data_dict = parse_output(generated)
+                if data_dict is None:
+                    print(f"⚠️  Chunk {chunk_idx+1}/{total} invalid in {filename}")
+                    raw_path = Path(config.output_dir,
+                                    f"CHUNK_ERROR_{chunk_idx+1}of{total}_{filename}.raw")
+                    raw_path.write_text(generated)
+                    continue
+                normalized = normalize_extracted_data(data_dict)
+                chunks_by_file.setdefault(filename, []).append(normalized)
+
+            for filename, chunk_results in chunks_by_file.items():
+                if not chunk_results:
+                    fallidos += 1
+                    continue
+                try:
+                    merged    = merge_results(chunk_results)
+                    validated = RealEstateContract(**merged)
+                    out = Path(config.output_dir, f"{filename}.json")
+                    out.write_text(json.dumps(validated.model_dump(), indent=4, ensure_ascii=False))
+                    print(f"✅ {filename} ({len(chunk_results)} chunks merged)")
+                    exitosos += 1
+                except Exception as e:
+                    print(f"❌ Merge error {filename}: {e}")
+                    fallidos += 1
 
     elapsed = (datetime.now() - start_time).total_seconds()
     summary = {

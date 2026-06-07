@@ -26,6 +26,8 @@ class ModelConfig:
     prompt_override: Optional[str] = None  # replaces "v3_full" for this model (e.g. disable CoT)
     gpu_memory_utilization: float = 0.90   # fraction of VRAM for vLLM
     max_output_tokens: int = 4096          # max tokens to generate per call
+    enforce_eager: bool = False            # skip CUDAGraph capture (saves VRAM for memory-constrained models)
+    vllm_use_v2_model_runner: Optional[bool] = None  # None = auto; False = force old runner (WSL2/UVA workaround)
 
 
 MODELS: dict[str, ModelConfig] = {
@@ -49,14 +51,17 @@ MODELS: dict[str, ModelConfig] = {
     ),
     "qwen25_32b_awq": ModelConfig(
         hf_id="Qwen/Qwen2.5-32B-Instruct-AWQ",
-        max_context=8000,               # ~18GB weights AWQ; KV cache constrained
-        gpu_memory_utilization=0.95,
+        max_context=8000,               # empirical KV ceiling for ~20GB weights on 23.9GB visible VRAM
+        gpu_memory_utilization=0.93,    # WSL2 reserves ~8GB for display; CUDA sees only ~23.9GB
+        enforce_eager=True,             # skip CUDAGraph capture — required to fit in 32GB VRAM
+        vllm_use_v2_model_runner=False,  # V2 runner requires UVA, unavailable in WSL2
     ),
     # ── Qwen 3 ────────────────────────────────────────────────────────────
     "qwen3_8b": ModelConfig(
         hf_id="Qwen/Qwen3-8B",
-        max_context=28000,              # ~29k available with CUDAGraphs at gpu_util=0.90
+        max_context=28000,
         prompt_override="v3_full_qwen3",  # disables thinking mode (/no_think)
+        vllm_use_v2_model_runner=False,  # V2 runner requires UVA, unavailable in WSL2
     ),
 }
 
@@ -64,6 +69,7 @@ MODELS: dict[str, ModelConfig] = {
 MODEL_IDS             = {k: v.hf_id           for k, v in MODELS.items()}
 MODEL_MAX_CONTEXT     = {k: v.max_context      for k, v in MODELS.items()}
 MODEL_PROMPT_OVERRIDE = {k: v.prompt_override  for k, v in MODELS.items() if v.prompt_override}
+MODEL_ENFORCE_EAGER   = {k: v.enforce_eager    for k, v in MODELS.items()}
 
 # ---------------------------------------------------------------------------
 # Prompt version registry
@@ -207,6 +213,8 @@ class RunConfig:
     max_context_tokens: int = 46080
     max_output_tokens: int = 4096
     gpu_memory_utilization: float = 0.90
+    enforce_eager: bool = False
+    vllm_use_v2_model_runner: Optional[bool] = None
 
     # --- Sampling ---
     temperature: float = 0.0

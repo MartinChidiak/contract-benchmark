@@ -26,7 +26,7 @@ from pathlib import Path
 
 from experiment_config import (
     RunConfig, PROMPT_VERSIONS,
-    MODELS, MODEL_IDS, MODEL_MAX_CONTEXT, MODEL_PROMPT_OVERRIDE,
+    MODELS, MODEL_IDS, MODEL_MAX_CONTEXT, MODEL_PROMPT_OVERRIDE, MODEL_ENFORCE_EAGER,
 )
 from run_experiment import run as run_inference
 from benchmark import benchmark as run_benchmark
@@ -129,6 +129,8 @@ EXPERIMENTS: list[RunConfig] = [
             "max_context_tokens":      MODELS[model_tag].max_context,
             "gpu_memory_utilization":  MODELS[model_tag].gpu_memory_utilization,
             "max_output_tokens":       MODELS[model_tag].max_output_tokens,
+            "enforce_eager":               MODELS[model_tag].enforce_eager,
+            "vllm_use_v2_model_runner":    MODELS[model_tag].vllm_use_v2_model_runner,
         }
     )
     for model_tag in MODELS_TO_RUN
