@@ -300,6 +300,8 @@ def compute_lang_factor(tokenizer, sample_texts: list[str], max_sample_chars: in
 
 
 def split_into_chunks(text: str, chunk_size: int, overlap: int) -> list[str]:
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
     chunks, start = [], 0
     while start < len(text):
         end = start + chunk_size
@@ -437,6 +439,12 @@ def load_llm_with_fallback(config: RunConfig):
     Both use the same model_id and HF_TOKEN, so no extra download occurs
     if the model is already cached.
     """
+    # Release any CUDA memory left by a previous LLM instance in the same process.
+    try:
+        import torch; torch.cuda.empty_cache()
+    except Exception:
+        pass
+
     requested     = config.max_context_tokens
     gpu_util      = config.gpu_memory_utilization
     enforce_eager = config.enforce_eager
@@ -581,7 +589,9 @@ def run(config: RunConfig) -> dict:
         print("✅ All files already processed.")
         return {"skipped": True}
 
-    print(f"📋 Pending: {len(pending)}")
+    total_contracts = len(filenames)
+    already_done    = total_contracts - len(pending)
+    print(f"📋 Overall progress: {already_done}/{total_contracts} done — {len(pending)} remaining")
 
     # llm, tokenizer, active_ctx — tokenizer added here
     llm, tokenizer, active_ctx = load_llm_with_fallback(config)
@@ -601,6 +611,27 @@ def run(config: RunConfig) -> dict:
     # The fixed 512-token guess is too small when few-shot examples are included.
     _overhead_tokens = len(tokenizer.encode(make_prompt(""), add_special_tokens=False))
     input_budget = active_ctx - config.max_output_tokens - _overhead_tokens - 64
+    if input_budget <= 0:
+        # Free GPU before raising — without this the EngineCore subprocess stays alive,
+        # consuming VRAM and causing the *next* attempt's KV-cache check to fail too.
+        try:
+            del llm
+            import gc, torch, time as _time
+            gc.collect()
+            torch.cuda.empty_cache()
+            _t0, _free0 = _time.monotonic(), torch.cuda.mem_get_info()[0]
+            while _time.monotonic() - _t0 < 25:
+                _time.sleep(2)
+                if torch.cuda.mem_get_info()[0] >= _free0 + 256 * 1024 * 1024:
+                    break
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"Context window too small for this prompt: active_ctx={active_ctx}, "
+            f"max_output={config.max_output_tokens}, prompt_overhead={_overhead_tokens} "
+            f"→ input_budget={input_budget}. "
+            f"Reduce max_output_tokens or use a simpler prompt (fewer/no few-shot examples)."
+        )
     print(f"📐 lang_factor: {lang_factor:.2f} chars/token (computed from {len(sample_texts)} samples, config default was {config.lang_factor})")
     print(f"📐 Prompt overhead: {_overhead_tokens} tokens (system prompt + few-shot + template)")
     char_limit   = estimate_char_limit(input_budget, lang_factor)
@@ -708,17 +739,52 @@ def run(config: RunConfig) -> dict:
                     print(f"❌ Merge error {filename}: {e}")
                     fallidos += 1
 
+            saved_so_far = already_done + exitosos
+            print(f"📊 Group {g_idx + 1}/{len(groups)} done — "
+                  f"{saved_so_far}/{total_contracts} contracts saved total")
+
     elapsed = (datetime.now() - start_time).total_seconds()
+
+    # Accumulate elapsed time across resumes — read previous session's total if it exists.
+    prev_summary_path = Path(config.output_dir, "inference_summary.json")
+    prev_elapsed = 0.0
+    prev_successful = 0
+    if prev_summary_path.exists():
+        try:
+            prev = json.loads(prev_summary_path.read_text(encoding="utf-8"))
+            prev_elapsed    = float(prev.get("elapsed_seconds", 0))
+            prev_successful = int(prev.get("successful", 0))
+        except Exception:
+            pass
+
     summary = {
         "run_name":        config.name,
-        "total":           len(pending),
-        "successful":      exitosos,
+        "total":           total_contracts,
+        "successful":      prev_successful + exitosos,
         "failed":          fallidos,
-        "elapsed_seconds": round(elapsed, 1),
+        "elapsed_seconds": round(prev_elapsed + elapsed, 1),
     }
     Path(config.output_dir, "inference_summary.json").write_text(
         json.dumps(summary, indent=2)
     )
+
+    # Explicitly free GPU memory so the next experiment in the same process
+    # can load at full context without lingering CUDA allocations.
+    try:
+        import gc, torch, time as _time
+        _free0 = torch.cuda.mem_get_info()[0]
+        del llm
+        gc.collect()
+        torch.cuda.empty_cache()
+        # Poll until the EngineCore subprocess releases VRAM (visible across all
+        # processes via cudaMemGetInfo). Stops as soon as ≥256 MB is freed or 25 s pass.
+        _t0 = _time.monotonic()
+        while _time.monotonic() - _t0 < 25:
+            _time.sleep(2)
+            if torch.cuda.mem_get_info()[0] >= _free0 + 256 * 1024 * 1024:
+                break
+    except Exception:
+        pass
 
     print(f"\n{'='*60}")
     print(f"📊 {config.name} → ✅ {exitosos}/{len(pending)}  ❌ {fallidos}  ⏱ {elapsed:.0f}s")
