@@ -1,0 +1,8 @@
+Dataset_CUAD_Completo/
+Dataset_Filtrado_Tesis/
+Contratos_txt/
+experiments/
+__pycache__/
+*.pyc
+.git/
+screenshots/

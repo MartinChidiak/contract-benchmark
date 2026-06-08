@@ -19,25 +19,29 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 # =========================================================
-# vLLM — latest version, includes sm_120 (RTX 5090) support
-# No version pin: whatever pip resolves is recorded in the freeze below
+# Step 1 — vLLM first so pip resolves torch with CUDA support.
+# Pinned to the version recorded in requirements-frozen.txt.
 # =========================================================
-RUN pip install --no-cache-dir vllm accelerate
+RUN pip install --no-cache-dir vllm==0.22.1 accelerate==1.13.0
 
 # =========================================================
-# App stack
+# Step 2 — App stack at exact frozen versions.
+# These have no CUDA deps so standard PyPI resolution is fine.
 # =========================================================
 RUN pip install --no-cache-dir \
-    streamlit \
-    pandas \
-    matplotlib \
-    plotly \
-    scikit-learn
+    streamlit==1.58.0 \
+    pandas==3.0.3 \
+    matplotlib==3.10.9 \
+    plotly==6.8.0 \
+    scikit-learn==1.9.0
 
 # =========================================================
-# Hard freeze for reproducibility
+# Step 3 — Lock remaining transitive deps to frozen versions.
+# --no-deps: packages are already installed from steps 1+2;
+# this just downgrades/upgrades any stragglers to match the freeze.
 # =========================================================
-RUN pip freeze > /opt/requirements.lock.txt
+COPY requirements-pinned.txt /tmp/requirements-pinned.txt
+RUN pip install --no-cache-dir --no-deps -r /tmp/requirements-pinned.txt
 
 # -------------------------
 # User setup
