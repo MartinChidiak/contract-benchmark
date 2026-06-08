@@ -52,6 +52,8 @@ MODELS: dict[str, ModelConfig] = {
     "qwen25_32b_awq": ModelConfig(
         hf_id="Qwen/Qwen2.5-32B-Instruct-AWQ",
         max_context=8000,               # empirical KV ceiling for ~20GB weights on 23.9GB visible VRAM
+        max_output_tokens=2048,         # reduced from 4096: keeps input_budget positive even at
+                                        # the 5120-token fallback (5120-2048-overhead-64 > 0)
         gpu_memory_utilization=0.93,    # WSL2 reserves ~8GB for display; CUDA sees only ~23.9GB
         enforce_eager=True,             # skip CUDAGraph capture — required to fit in 32GB VRAM
         vllm_use_v2_model_runner=False,  # V2 runner requires UVA, unavailable in WSL2
