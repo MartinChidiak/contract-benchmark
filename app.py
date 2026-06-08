@@ -346,7 +346,34 @@ with tab_run:
 
 
 # ── Load comparison data once (shared by sidebar, Tab 3, and Tab 4) ──────────
-_comparison_df = pd.read_csv(COMPARISON_CSV) if COMPARISON_CSV.exists() else None
+# Merge comparison.csv with any benchmark_summary.json files not yet in it,
+# so experiments run via the app (not run_all.py) are immediately visible.
+def _load_comparison_df() -> "pd.DataFrame | None":
+    base = pd.read_csv(COMPARISON_CSV) if COMPARISON_CSV.exists() else pd.DataFrame()
+    existing_names = set(base["run_name"].tolist()) if not base.empty else set()
+    extra_rows = []
+    if EXPERIMENTS_DIR.exists():
+        for summary_path in sorted(EXPERIMENTS_DIR.glob("*/results/benchmark_summary.json")):
+            try:
+                row = json.loads(summary_path.read_text(encoding="utf-8"))
+                # Always override elapsed_seconds from inference_summary.json —
+                # benchmark_summary.json caches a stale value when runs are resumed.
+                inf_path = summary_path.parent / "inference_summary.json"
+                if inf_path.exists():
+                    inf = json.loads(inf_path.read_text(encoding="utf-8"))
+                    row["elapsed_seconds"] = inf.get("elapsed_seconds", row.get("elapsed_seconds", ""))
+                if row.get("run_name") not in existing_names:
+                    extra_rows.append(row)
+            except Exception:
+                pass
+    if not extra_rows and base.empty:
+        return None
+    if extra_rows:
+        extra_df = pd.DataFrame(extra_rows)
+        base = pd.concat([base, extra_df], ignore_index=True) if not base.empty else extra_df
+    return base
+
+_comparison_df = _load_comparison_df()
 
 # ── Sidebar filters ───────────────────────────────────────────────────────────
 with st.sidebar:
